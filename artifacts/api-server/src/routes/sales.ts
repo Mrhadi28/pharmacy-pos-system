@@ -6,7 +6,7 @@ import {
   medicinesTable,
   customersTable,
 } from "@workspace/db/schema";
-import { eq, and, gte, lte, sql } from "drizzle-orm";
+import { eq, and, gte, lte, sql, or } from "drizzle-orm";
 
 const router = Router();
 
@@ -20,7 +20,7 @@ function generateInvoiceNumber(): string {
 }
 
 router.get("/", async (req, res) => {
-  const { startDate, endDate, customerId } = req.query;
+  const { startDate, endDate, customerId, paymentStatus } = req.query;
 
   const conditions = [];
   if (startDate) conditions.push(gte(salesTable.createdAt, new Date(startDate as string)));
@@ -30,12 +30,12 @@ router.get("/", async (req, res) => {
     conditions.push(lte(salesTable.createdAt, end));
   }
   if (customerId) conditions.push(eq(salesTable.customerId, parseInt(customerId as string)));
+  if (paymentStatus) conditions.push(eq(salesTable.paymentStatus, paymentStatus as string));
 
   const salesRows = conditions.length
     ? await db.select().from(salesTable).where(and(...conditions)).orderBy(salesTable.createdAt)
     : await db.select().from(salesTable).orderBy(salesTable.createdAt);
 
-  // Fetch items and customer names
   const result = await Promise.all(
     salesRows.map(async (sale) => {
       const items = await db.select().from(saleItemsTable).where(eq(saleItemsTable.saleId, sale.id));
@@ -54,10 +54,7 @@ router.get("/", async (req, res) => {
 router.get("/:id", async (req, res) => {
   const id = parseInt(req.params.id);
   const [sale] = await db.select().from(salesTable).where(eq(salesTable.id, id));
-  if (!sale) {
-    res.status(404).json({ error: "Sale not found" });
-    return;
-  }
+  if (!sale) { res.status(404).json({ error: "Sale not found" }); return; }
   const items = await db.select().from(saleItemsTable).where(eq(saleItemsTable.saleId, id));
   let customerName = null;
   if (sale.customerId) {
@@ -75,10 +72,10 @@ router.post("/", async (req, res) => {
     return;
   }
 
-  // Fetch medicine prices and validate stock
   const enrichedItems: Array<{
     medicineId: number;
     medicineName: string;
+    medicineUnit: string;
     quantity: number;
     unitPrice: number;
     discount: number;
@@ -88,20 +85,9 @@ router.post("/", async (req, res) => {
   let subtotal = 0;
 
   for (const item of items) {
-    const [medicine] = await db
-      .select()
-      .from(medicinesTable)
-      .where(eq(medicinesTable.id, item.medicineId));
-
-    if (!medicine) {
-      res.status(400).json({ error: `Medicine ${item.medicineId} not found` });
-      return;
-    }
-
-    if (medicine.stockQuantity < item.quantity) {
-      res.status(400).json({ error: `Insufficient stock for ${medicine.name}` });
-      return;
-    }
+    const [medicine] = await db.select().from(medicinesTable).where(eq(medicinesTable.id, item.medicineId));
+    if (!medicine) { res.status(400).json({ error: `Medicine ${item.medicineId} not found` }); return; }
+    if (medicine.stockQuantity < item.quantity) { res.status(400).json({ error: `Insufficient stock for ${medicine.name}. Available: ${medicine.stockQuantity} ${medicine.unit}` }); return; }
 
     const unitPrice = parseFloat(medicine.salePrice as string);
     const itemDiscount = item.discount ?? 0;
@@ -111,6 +97,7 @@ router.post("/", async (req, res) => {
     enrichedItems.push({
       medicineId: item.medicineId,
       medicineName: medicine.name,
+      medicineUnit: medicine.unit,
       quantity: item.quantity,
       unitPrice,
       discount: itemDiscount,
@@ -122,31 +109,47 @@ router.post("/", async (req, res) => {
   const tax = 0;
   const totalAmount = subtotal - discountAmount + tax;
   const paidAmt = parseFloat(paidAmount);
-  const changeAmount = Math.max(0, paidAmt - totalAmount);
 
-  // Create the sale in a transaction
-  const [newSale] = await db
-    .insert(salesTable)
-    .values({
-      invoiceNumber: generateInvoiceNumber(),
-      customerId: customerId ?? null,
-      subtotal: subtotal.toFixed(2),
-      discount: discountAmount.toFixed(2),
-      tax: tax.toFixed(2),
-      totalAmount: totalAmount.toFixed(2),
-      paidAmount: paidAmt.toFixed(2),
-      changeAmount: changeAmount.toFixed(2),
-      paymentMethod,
-      status: "completed",
-      notes: notes ?? null,
-    })
-    .returning();
+  // Determine payment status
+  let paymentStatus = "paid";
+  let creditAmount = 0;
+  let changeAmount = 0;
 
-  // Insert items and reduce stock
+  if (paymentMethod === "credit") {
+    paymentStatus = "credit";
+    creditAmount = totalAmount;
+    changeAmount = 0;
+  } else if (paidAmt < totalAmount) {
+    paymentStatus = "partial";
+    creditAmount = totalAmount - paidAmt;
+    changeAmount = 0;
+  } else {
+    paymentStatus = "paid";
+    creditAmount = 0;
+    changeAmount = Math.max(0, paidAmt - totalAmount);
+  }
+
+  const [newSale] = await db.insert(salesTable).values({
+    invoiceNumber: generateInvoiceNumber(),
+    customerId: customerId ?? null,
+    subtotal: subtotal.toFixed(2),
+    discount: discountAmount.toFixed(2),
+    tax: tax.toFixed(2),
+    totalAmount: totalAmount.toFixed(2),
+    paidAmount: paymentMethod === "credit" ? "0.00" : paidAmt.toFixed(2),
+    changeAmount: changeAmount.toFixed(2),
+    creditAmount: creditAmount.toFixed(2),
+    paymentStatus,
+    paymentMethod: paymentMethod === "credit" ? "cash" : paymentMethod,
+    status: "completed",
+    notes: notes ?? null,
+  }).returning();
+
   const saleItemsData = enrichedItems.map((item) => ({
     saleId: newSale.id,
     medicineId: item.medicineId,
     medicineName: item.medicineName,
+    medicineUnit: item.medicineUnit,
     quantity: item.quantity,
     unitPrice: item.unitPrice.toFixed(2),
     discount: item.discount.toFixed(2),
@@ -157,23 +160,22 @@ router.post("/", async (req, res) => {
 
   // Reduce stock
   for (const item of enrichedItems) {
-    await db
-      .update(medicinesTable)
-      .set({
-        stockQuantity: sql`${medicinesTable.stockQuantity} - ${item.quantity}`,
-      })
-      .where(eq(medicinesTable.id, item.medicineId));
+    await db.update(medicinesTable).set({
+      stockQuantity: sql`${medicinesTable.stockQuantity} - ${item.quantity}`,
+    }).where(eq(medicinesTable.id, item.medicineId));
   }
 
-  // Update customer stats
-  if (customerId) {
-    await db
-      .update(customersTable)
-      .set({
-        totalPurchases: sql`${customersTable.totalPurchases} + ${totalAmount}`,
-        visitCount: sql`${customersTable.visitCount} + 1`,
-      })
-      .where(eq(customersTable.id, customerId));
+  // Update customer stats (only for paid transactions)
+  if (customerId && paymentStatus === "paid") {
+    await db.update(customersTable).set({
+      totalPurchases: sql`${customersTable.totalPurchases} + ${totalAmount}`,
+      visitCount: sql`${customersTable.visitCount} + 1`,
+    }).where(eq(customersTable.id, customerId));
+  } else if (customerId) {
+    // Still count the visit
+    await db.update(customersTable).set({
+      visitCount: sql`${customersTable.visitCount} + 1`,
+    }).where(eq(customersTable.id, customerId));
   }
 
   let customerName = null;

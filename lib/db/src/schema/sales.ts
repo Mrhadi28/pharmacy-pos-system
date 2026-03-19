@@ -13,6 +13,8 @@ export const salesTable = pgTable("sales", {
   totalAmount: numeric("total_amount", { precision: 12, scale: 2 }).notNull(),
   paidAmount: numeric("paid_amount", { precision: 12, scale: 2 }).notNull(),
   changeAmount: numeric("change_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  creditAmount: numeric("credit_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  paymentStatus: text("payment_status").notNull().default("paid"), // paid, credit, partial
   paymentMethod: text("payment_method").notNull().default("cash"),
   status: text("status").notNull().default("completed"),
   notes: text("notes"),
@@ -24,6 +26,7 @@ export const saleItemsTable = pgTable("sale_items", {
   saleId: integer("sale_id").notNull().references(() => salesTable.id),
   medicineId: integer("medicine_id").notNull(),
   medicineName: text("medicine_name").notNull(),
+  medicineUnit: text("medicine_unit").notNull().default("tablets"),
   quantity: integer("quantity").notNull(),
   unitPrice: numeric("unit_price", { precision: 10, scale: 2 }).notNull(),
   discount: numeric("discount", { precision: 10, scale: 2 }).notNull().default("0"),

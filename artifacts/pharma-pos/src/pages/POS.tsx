@@ -1,23 +1,17 @@
-import { useState, useMemo } from "react";
-import { 
-  useGetMedicines, 
-  useCreateSale, 
-  Medicine, 
-  CreateSaleInputPaymentMethod 
+import { useState, useMemo, useRef } from "react";
+import {
+  useGetMedicines,
+  useCreateSale,
+  useGetCustomers,
+  useGetSale,
+  CreateSaleInputPaymentMethod
 } from "@workspace/api-client-react";
 import { useCart } from "@/store/use-cart";
+import { useAuth } from "@/hooks/use-auth";
 import { formatPKR } from "@/lib/format";
-import { 
-  Search, 
-  Plus, 
-  Minus, 
-  Trash2, 
-  ShoppingCart, 
-  CreditCard, 
-  Banknote,
-  Smartphone,
-  ReceiptText,
-  AlertCircle
+import {
+  Search, Plus, Minus, Trash2, ShoppingCart, CreditCard, Banknote,
+  Smartphone, ReceiptText, AlertCircle, Printer, Download, User, BookOpen
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,123 +20,160 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 
 export default function POS() {
   const [searchTerm, setSearchTerm] = useState("");
   const [showReceipt, setShowReceipt] = useState(false);
-  const [lastSaleId, setLastSaleId] = useState<string | null>(null);
+  const [completedSale, setCompletedSale] = useState<any>(null);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
+  const receiptRef = useRef<HTMLDivElement>(null);
 
-  const { data: medicines = [], isLoading } = useGetMedicines({ isActive: true });
+  const { pharmacy, user } = useAuth();
+  const { data: medicines = [], isLoading } = useGetMedicines();
+  const { data: customers = [] } = useGetCustomers();
   const { mutate: createSale, isPending: isCheckingOut } = useCreateSale();
-  
+
   const cart = useCart();
 
   const filteredMedicines = useMemo(() => {
-    return medicines.filter(m => 
-      m.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (m.genericName && m.genericName.toLowerCase().includes(searchTerm.toLowerCase())) ||
+    const activeMeds = medicines.filter((m: any) => m.isActive !== false);
+    if (!searchTerm) return activeMeds;
+    const q = searchTerm.toLowerCase();
+    return activeMeds.filter((m: any) =>
+      m.name.toLowerCase().includes(q) ||
+      (m.genericName && m.genericName.toLowerCase().includes(q)) ||
       (m.barcode && m.barcode.includes(searchTerm))
     );
   }, [medicines, searchTerm]);
+
+  const isCredit = cart.paymentMethod === "credit";
 
   const handleCheckout = () => {
     if (cart.items.length === 0) {
       toast({ title: "Cart is empty", variant: "destructive" });
       return;
     }
-
-    if (cart.paidAmount < cart.getGrandTotal()) {
-      toast({ title: "Insufficient paid amount", variant: "destructive" });
+    if (!isCredit && cart.paidAmount <= 0) {
+      toast({ title: "Enter paid amount", variant: "destructive" });
       return;
     }
 
     createSale({
       data: {
+        customerId: selectedCustomerId ?? undefined,
         items: cart.items.map(i => ({
           medicineId: i.medicine.id,
           quantity: i.quantity,
           discount: i.discount
         })),
-        paidAmount: cart.paidAmount,
-        paymentMethod: cart.paymentMethod,
+        paidAmount: isCredit ? 0 : cart.paidAmount,
+        paymentMethod: cart.paymentMethod as CreateSaleInputPaymentMethod,
         discount: cart.globalDiscount,
       }
     }, {
       onSuccess: (data) => {
-        toast({ title: "Sale completed successfully!" });
-        setLastSaleId(data.invoiceNumber);
+        setCompletedSale({ ...data, pharmacyName: pharmacy?.name, pharmacyPhone: pharmacy?.phone, pharmacyAddress: pharmacy?.address, cashierName: user?.fullName });
         setShowReceipt(true);
         cart.clearCart();
+        setSelectedCustomerId(null);
+        toast({ title: isCredit ? "Khata sale recorded!" : "Sale completed!" });
       },
-      onError: (err) => {
+      onError: (err: any) => {
         toast({ title: "Checkout failed", description: err.message, variant: "destructive" });
       }
     });
   };
 
+  const handlePrint = () => {
+    const printContent = receiptRef.current;
+    if (!printContent) return;
+    const win = window.open("", "_blank", "width=400,height=600");
+    if (!win) { toast({ title: "Allow popups to print", variant: "destructive" }); return; }
+    win.document.write(`
+      <html>
+      <head>
+        <title>Receipt - ${completedSale?.invoiceNumber}</title>
+        <style>
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body { font-family: 'Courier New', monospace; font-size: 12px; width: 80mm; padding: 4mm; }
+          .center { text-align: center; }
+          .right { text-align: right; }
+          .bold { font-weight: bold; }
+          .title { font-size: 16px; font-weight: bold; }
+          .subtitle { font-size: 11px; color: #555; }
+          .divider { border-top: 1px dashed #333; margin: 6px 0; }
+          .item-row { display: flex; justify-content: space-between; padding: 2px 0; }
+          .total-row { display: flex; justify-content: space-between; font-weight: bold; font-size: 14px; padding: 4px 0; }
+          .footer { text-align: center; font-size: 10px; color: #555; margin-top: 8px; }
+          .badge { display: inline-block; background: #fee2e2; color: #991b1b; padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+          @media print { body { padding: 0; } }
+        </style>
+      </head>
+      <body>
+        ${printContent.innerHTML}
+        <script>window.print(); window.onafterprint = function(){ window.close(); }</script>
+      </body>
+      </html>
+    `);
+    win.document.close();
+  };
+
   return (
-    <div className="h-[calc(100vh-8rem)] flex flex-col lg:flex-row gap-6">
-      
+    <div className="h-[calc(100vh-8rem)] flex flex-col lg:flex-row gap-4">
+
       {/* LEFT: Medicine Selection */}
       <div className="flex-1 flex flex-col h-full overflow-hidden bg-card rounded-2xl border border-border shadow-md shadow-black/5">
         <div className="p-4 border-b border-border bg-muted/30">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground w-5 h-5" />
-            <Input 
+            <Input
               autoFocus
               className="w-full pl-10 py-6 text-lg rounded-xl border-border bg-background focus-visible:ring-primary shadow-inner"
-              placeholder="Search medicines by name, generic, or barcode (F1)..." 
+              placeholder="Search medicines by name, generic, or barcode..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
         </div>
-        
+
         <ScrollArea className="flex-1 p-4">
           {isLoading ? (
             <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
-              {[1,2,3,4,5,6].map(i => <div key={i} className="h-32 bg-muted animate-pulse rounded-xl" />)}
+              {[1,2,3,4,5,6].map(i => <div key={i} className="h-28 bg-muted animate-pulse rounded-xl" />)}
             </div>
           ) : filteredMedicines.length === 0 ? (
-             <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
-               <PillIcon className="w-16 h-16 mb-4 opacity-20" />
-               <p className="text-lg">No medicines found</p>
-             </div>
+            <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+              <PillIcon className="w-16 h-16 mb-4 opacity-20" />
+              <p className="text-lg">No medicines found</p>
+            </div>
           ) : (
-            <div className="grid grid-cols-2 xl:grid-cols-3 gap-4 pb-10">
-              {filteredMedicines.map(med => (
-                <Card 
-                  key={med.id} 
-                  className={`
-                    cursor-pointer transition-all duration-200 border-border hover:border-primary hover:shadow-lg
-                    ${med.stockQuantity <= 0 ? 'opacity-50 grayscale hover:border-destructive' : ''}
-                  `}
+            <div className="grid grid-cols-2 xl:grid-cols-3 gap-3 pb-10">
+              {filteredMedicines.map((med: any) => (
+                <Card
+                  key={med.id}
+                  className={`cursor-pointer transition-all duration-200 border-border hover:border-primary hover:shadow-lg
+                    ${med.stockQuantity <= 0 ? 'opacity-50 grayscale' : ''}`}
                   onClick={() => {
                     if (med.stockQuantity > 0) {
                       cart.addItem(med);
-                      toast({ title: `Added ${med.name}`, duration: 1000 });
                     } else {
                       toast({ title: "Out of stock!", variant: "destructive" });
                     }
                   }}
                 >
-                  <div className="p-4 flex flex-col h-full">
-                    <div className="flex justify-between items-start mb-2">
-                      <h4 className="font-bold text-foreground leading-tight line-clamp-2">{med.name}</h4>
-                      <Badge variant={med.stockQuantity > med.minStockLevel ? "default" : med.stockQuantity > 0 ? "secondary" : "destructive"}>
+                  <div className="p-3 flex flex-col h-full">
+                    <div className="flex justify-between items-start mb-1">
+                      <h4 className="font-bold text-foreground leading-tight line-clamp-2 text-sm">{med.name}</h4>
+                      <Badge variant={med.stockQuantity > med.minStockLevel ? "default" : med.stockQuantity > 0 ? "secondary" : "destructive"} className="text-xs ml-1 flex-shrink-0">
                         {med.stockQuantity} {med.unit}
                       </Badge>
                     </div>
-                    <p className="text-xs text-muted-foreground truncate mb-auto">{med.genericName || "N/A"}</p>
-                    <div className="mt-4 flex justify-between items-end">
-                      <span className="font-display font-bold text-lg text-primary">{formatPKR(med.salePrice)}</span>
-                      {med.requiresPrescription && <Badge variant="outline" className="text-[10px]">Rx</Badge>}
+                    <p className="text-xs text-muted-foreground truncate">{med.genericName || med.manufacturer || ""}</p>
+                    <div className="mt-2 flex justify-between items-end">
+                      <span className="font-display font-bold text-base text-primary">{formatPKR(med.salePrice)}</span>
+                      {med.requiresPrescription && <Badge variant="outline" className="text-[10px] px-1">Rx</Badge>}
                     </div>
                   </div>
                 </Card>
@@ -153,55 +184,63 @@ export default function POS() {
       </div>
 
       {/* RIGHT: Cart & Checkout */}
-      <div className="w-full lg:w-[450px] flex flex-col h-full bg-card rounded-2xl border border-border shadow-xl shadow-black/10 overflow-hidden">
+      <div className="w-full lg:w-[420px] flex flex-col h-full bg-card rounded-2xl border border-border shadow-xl shadow-black/10 overflow-hidden">
         <div className="p-4 bg-primary text-primary-foreground flex justify-between items-center">
-          <h2 className="font-display font-bold text-xl flex items-center gap-2">
+          <h2 className="font-display font-bold text-lg flex items-center gap-2">
             <ShoppingCart className="w-5 h-5" /> Current Sale
           </h2>
-          <Badge variant="secondary" className="bg-white/20 hover:bg-white/30 text-white border-none">
-            {cart.items.length} items
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary" className="bg-white/20 hover:bg-white/30 text-white border-none">
+              {cart.items.length} items
+            </Badge>
+          </div>
         </div>
 
-        <ScrollArea className="flex-1 p-0 bg-muted/10">
+        {/* Customer Selection */}
+        <div className="px-4 py-2 bg-muted/30 border-b border-border">
+          <div className="flex items-center gap-2">
+            <User className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+            <select
+              className="flex-1 bg-transparent text-sm text-foreground border-none outline-none py-1"
+              value={selectedCustomerId ?? ""}
+              onChange={e => setSelectedCustomerId(e.target.value ? parseInt(e.target.value) : null)}
+            >
+              <option value="">Walk-in Customer</option>
+              {customers.map((c: any) => (
+                <option key={c.id} value={c.id}>{c.name} — {c.phone}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <ScrollArea className="flex-1 bg-muted/10">
           {cart.items.length === 0 ? (
-            <div className="h-full min-h-[300px] flex flex-col items-center justify-center text-muted-foreground opacity-50">
-              <ShoppingCart className="w-16 h-16 mb-4" />
+            <div className="h-full min-h-[250px] flex flex-col items-center justify-center text-muted-foreground opacity-50">
+              <ShoppingCart className="w-14 h-14 mb-3" />
               <p>Cart is empty</p>
-              <p className="text-sm">Click items to add</p>
+              <p className="text-sm">Click medicines to add</p>
             </div>
           ) : (
             <div className="divide-y divide-border">
               {cart.items.map(item => (
-                <div key={item.medicine.id} className="p-4 bg-background hover:bg-muted/30 transition-colors">
-                  <div className="flex justify-between font-semibold mb-2">
+                <div key={item.medicine.id} className="p-3 bg-background hover:bg-muted/30 transition-colors">
+                  <div className="flex justify-between font-semibold mb-1.5 text-sm">
                     <span className="line-clamp-1 pr-2">{item.medicine.name}</span>
-                    <span>{formatPKR(item.medicine.salePrice * item.quantity)}</span>
+                    <span>{formatPKR((item.medicine.salePrice as number) * item.quantity - item.discount)}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 bg-muted rounded-lg p-1">
-                      <Button 
-                        variant="ghost" size="icon" className="h-7 w-7 rounded-md"
-                        onClick={() => cart.updateQuantity(item.medicine.id, item.quantity - 1)}
-                      >
+                    <div className="flex items-center gap-1.5 bg-muted rounded-lg p-1">
+                      <Button variant="ghost" size="icon" className="h-6 w-6 rounded-md" onClick={() => cart.updateQuantity(item.medicine.id, item.quantity - 1)}>
                         <Minus className="w-3 h-3" />
                       </Button>
-                      <span className="w-8 text-center font-medium text-sm">{item.quantity}</span>
-                      <Button 
-                        variant="ghost" size="icon" className="h-7 w-7 rounded-md"
-                        onClick={() => cart.updateQuantity(item.medicine.id, item.quantity + 1)}
-                      >
+                      <span className="w-7 text-center font-medium text-sm">{item.quantity}</span>
+                      <Button variant="ghost" size="icon" className="h-6 w-6 rounded-md" onClick={() => cart.updateQuantity(item.medicine.id, item.quantity + 1)}>
                         <Plus className="w-3 h-3" />
                       </Button>
                     </div>
-                    
-                    <Button 
-                      variant="ghost" 
-                      size="icon" 
-                      className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                      onClick={() => cart.removeItem(item.medicine.id)}
-                    >
-                      <Trash2 className="w-4 h-4" />
+                    <span className="text-xs text-muted-foreground">{formatPKR(item.medicine.salePrice as number)} × {item.quantity} {item.medicine.unit}</span>
+                    <Button variant="ghost" size="icon" className="w-7 h-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10" onClick={() => cart.removeItem(item.medicine.id)}>
+                      <Trash2 className="w-3.5 h-3.5" />
                     </Button>
                   </div>
                 </div>
@@ -211,75 +250,85 @@ export default function POS() {
         </ScrollArea>
 
         {/* Checkout Panel */}
-        <div className="p-5 border-t border-border bg-background shadow-[0_-10px_30px_-15px_rgba(0,0,0,0.1)] z-10">
-          <div className="space-y-3 mb-6">
-            <div className="flex justify-between text-muted-foreground text-sm">
+        <div className="p-4 border-t border-border bg-background z-10">
+          <div className="space-y-1.5 mb-4 text-sm">
+            <div className="flex justify-between text-muted-foreground">
               <span>Subtotal</span>
               <span>{formatPKR(cart.getSubtotal())}</span>
             </div>
-            <div className="flex justify-between text-muted-foreground text-sm">
-              <span>Discount</span>
-              <span className="text-destructive">-{formatPKR(cart.getTotalDiscount())}</span>
-            </div>
-            <div className="flex justify-between font-display font-bold text-2xl pt-2 border-t border-border border-dashed">
+            {cart.getTotalDiscount() > 0 && (
+              <div className="flex justify-between text-muted-foreground">
+                <span>Discount</span>
+                <span className="text-destructive">-{formatPKR(cart.getTotalDiscount())}</span>
+              </div>
+            )}
+            <div className="flex justify-between font-display font-bold text-xl pt-1.5 border-t border-border border-dashed">
               <span>Total</span>
               <span className="text-primary">{formatPKR(cart.getGrandTotal())}</span>
             </div>
           </div>
 
-          <div className="space-y-4">
-            <div className="grid grid-cols-4 gap-2">
+          <div className="space-y-3">
+            {/* Payment Methods */}
+            <div className="grid grid-cols-5 gap-1.5">
               {[
                 { id: 'cash', icon: Banknote, label: 'Cash' },
                 { id: 'card', icon: CreditCard, label: 'Card' },
-                { id: 'jazzcash', icon: Smartphone, label: 'JazzCash' },
-                { id: 'easypaisa', icon: Smartphone, label: 'EasyPaisa' }
+                { id: 'jazzcash', icon: Smartphone, label: 'Jazz' },
+                { id: 'easypaisa', icon: Smartphone, label: 'Easy' },
+                { id: 'credit', icon: BookOpen, label: 'Khata' },
               ].map(method => (
                 <button
                   key={method.id}
                   onClick={() => cart.setPaymentMethod(method.id as any)}
-                  className={`
-                    flex flex-col items-center justify-center p-2 rounded-xl border text-xs font-medium transition-all
-                    ${cart.paymentMethod === method.id 
-                      ? 'border-primary bg-primary/10 text-primary shadow-sm' 
+                  className={`flex flex-col items-center justify-center p-1.5 rounded-xl border text-xs font-medium transition-all
+                    ${cart.paymentMethod === method.id
+                      ? method.id === 'credit' ? 'border-orange-400 bg-orange-50 text-orange-600 shadow-sm' : 'border-primary bg-primary/10 text-primary shadow-sm'
                       : 'border-border bg-background text-muted-foreground hover:bg-muted'
-                    }
-                  `}
+                    }`}
                 >
-                  <method.icon className="w-5 h-5 mb-1" />
+                  <method.icon className="w-4 h-4 mb-0.5" />
                   {method.label}
                 </button>
               ))}
             </div>
 
-            <div className="flex items-center gap-3">
-              <div className="flex-1">
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1 block">Paid Amount (PKR)</label>
-                <Input 
-                  type="number" 
-                  className="font-bold text-lg h-12"
-                  value={cart.paidAmount || ''}
-                  onChange={(e) => cart.setPaidAmount(Number(e.target.value))}
-                  placeholder="0"
-                />
+            {isCredit ? (
+              <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 text-sm text-orange-700">
+                <p className="font-semibold flex items-center gap-1.5">
+                  <BookOpen className="w-4 h-4" /> Khata (Credit) Sale
+                </p>
+                <p className="text-xs mt-0.5">Full amount will be added to customer's khata balance</p>
+                {!selectedCustomerId && <p className="text-xs mt-1 font-semibold text-orange-600">⚠ Please select a customer for khata</p>}
               </div>
-              <div className="flex-1">
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1 block">Change</label>
-                <div className={`
-                  flex items-center px-4 h-12 rounded-md font-bold text-lg border
-                  ${cart.getChange() < 0 ? 'bg-destructive/10 text-destructive border-destructive/20' : 'bg-muted border-transparent text-foreground'}
-                `}>
-                  {formatPKR(cart.getChange())}
+            ) : (
+              <div className="flex items-center gap-2">
+                <div className="flex-1">
+                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1 block">Paid (PKR)</label>
+                  <Input
+                    type="number"
+                    className="font-bold text-base h-10"
+                    value={cart.paidAmount || ''}
+                    onChange={(e) => cart.setPaidAmount(Number(e.target.value))}
+                    placeholder="0"
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1 block">Change</label>
+                  <div className={`flex items-center px-3 h-10 rounded-md font-bold text-base border
+                    ${cart.getChange() < 0 ? 'bg-destructive/10 text-destructive border-destructive/20' : 'bg-muted border-transparent text-foreground'}`}>
+                    {formatPKR(Math.max(0, cart.getChange()))}
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
 
-            <Button 
-              className="w-full h-14 text-lg font-bold shadow-lg shadow-primary/25 rounded-xl"
-              disabled={cart.items.length === 0 || cart.paidAmount < cart.getGrandTotal() || isCheckingOut}
+            <Button
+              className="w-full h-12 text-base font-bold shadow-lg shadow-primary/25 rounded-xl"
+              disabled={cart.items.length === 0 || (!isCredit && cart.paidAmount <= 0) || isCheckingOut || (isCredit && !selectedCustomerId)}
               onClick={handleCheckout}
             >
-              {isCheckingOut ? "Processing..." : "Checkout (F2)"}
+              {isCheckingOut ? "Processing..." : isCredit ? "Add to Khata" : "Checkout"}
             </Button>
           </div>
         </div>
@@ -287,25 +336,72 @@ export default function POS() {
 
       {/* Receipt Modal */}
       <Dialog open={showReceipt} onOpenChange={setShowReceipt}>
-        <DialogContent className="sm:max-w-[400px]">
+        <DialogContent className="sm:max-w-[380px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="text-center font-display text-2xl flex flex-col items-center gap-2">
-              <ReceiptText className="w-12 h-12 text-primary" />
-              Payment Successful
+            <DialogTitle className="text-center font-display text-xl flex items-center justify-center gap-2">
+              <ReceiptText className="w-6 h-6 text-primary" />
+              {completedSale?.paymentStatus === "credit" ? "Khata Recorded!" : "Sale Complete!"}
             </DialogTitle>
           </DialogHeader>
-          
-          <div className="bg-muted p-4 rounded-xl text-center space-y-2 mt-4 font-mono text-sm">
-            <p className="font-bold text-lg mb-4">PharmaPOS Pakistan</p>
-            <p>Invoice: #{lastSaleId}</p>
-            <p>Date: {new Date().toLocaleString()}</p>
-            <div className="border-t border-b border-dashed border-border py-4 my-4">
-               <p>Thanks for your purchase!</p>
+
+          {/* Printable Receipt */}
+          <div ref={receiptRef} className="bg-white border border-dashed border-gray-300 rounded-xl p-4 font-mono text-xs space-y-2">
+            <div className="center text-center">
+              <div className="title bold text-base font-bold">{completedSale?.pharmacyName || "PharmaPOS"}</div>
+              {completedSale?.pharmacyAddress && <div className="subtitle text-gray-500 text-xs">{completedSale.pharmacyAddress}</div>}
+              {completedSale?.pharmacyPhone && <div className="subtitle text-gray-500 text-xs">Tel: {completedSale.pharmacyPhone}</div>}
             </div>
+            <div className="divider border-t border-dashed border-gray-400 my-1" />
+            <div className="flex justify-between"><span className="text-gray-500">Invoice</span><span className="font-bold">{completedSale?.invoiceNumber}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">Date</span><span>{new Date(completedSale?.createdAt || Date.now()).toLocaleString("en-PK")}</span></div>
+            {completedSale?.customerName && <div className="flex justify-between"><span className="text-gray-500">Customer</span><span className="font-bold">{completedSale.customerName}</span></div>}
+            {completedSale?.cashierName && <div className="flex justify-between"><span className="text-gray-500">Cashier</span><span>{completedSale.cashierName}</span></div>}
+            <div className="divider border-t border-dashed border-gray-400 my-1" />
+            <div className="flex justify-between font-bold text-xs text-gray-500 mb-1">
+              <span className="flex-1">Item</span><span className="w-8 text-center">Qty</span><span className="w-14 text-right">Price</span><span className="w-16 text-right">Total</span>
+            </div>
+            {(completedSale?.items || []).map((item: any, i: number) => (
+              <div key={i} className="item-row">
+                <span className="flex-1 truncate">{item.medicineName}</span>
+                <span className="w-8 text-center">{item.quantity}</span>
+                <span className="w-14 text-right">{formatPKR(parseFloat(item.unitPrice))}</span>
+                <span className="w-16 text-right font-semibold">{formatPKR(parseFloat(item.total))}</span>
+              </div>
+            ))}
+            <div className="divider border-t border-dashed border-gray-400 my-1" />
+            {parseFloat(completedSale?.discount || "0") > 0 && (
+              <div className="flex justify-between text-gray-600"><span>Discount</span><span>-{formatPKR(parseFloat(completedSale?.discount))}</span></div>
+            )}
+            <div className="total-row flex justify-between font-bold text-sm">
+              <span>Total</span><span>{formatPKR(parseFloat(completedSale?.totalAmount || "0"))}</span>
+            </div>
+            {completedSale?.paymentStatus !== "credit" && (
+              <>
+                <div className="flex justify-between text-gray-600"><span>Paid ({completedSale?.paymentMethod?.toUpperCase()})</span><span>{formatPKR(parseFloat(completedSale?.paidAmount || "0"))}</span></div>
+                {parseFloat(completedSale?.changeAmount || "0") > 0 && (
+                  <div className="flex justify-between text-gray-600"><span>Change</span><span>{formatPKR(parseFloat(completedSale?.changeAmount))}</span></div>
+                )}
+              </>
+            )}
+            {completedSale?.paymentStatus === "credit" && (
+              <div className="flex justify-between font-bold text-red-600 text-sm">
+                <span>KHATA (Credit)</span><span>{formatPKR(parseFloat(completedSale?.creditAmount || completedSale?.totalAmount || "0"))}</span>
+              </div>
+            )}
+            {completedSale?.paymentStatus === "partial" && (
+              <div className="flex justify-between font-bold text-orange-600 text-sm">
+                <span>Outstanding</span><span>{formatPKR(parseFloat(completedSale?.creditAmount || "0"))}</span>
+              </div>
+            )}
+            <div className="divider border-t border-dashed border-gray-400 my-1" />
+            <div className="footer text-center text-gray-400 text-xs">Thank you for your purchase!<br />Please come again</div>
           </div>
 
-          <DialogFooter className="sm:justify-center mt-6">
-            <Button onClick={() => setShowReceipt(false)} className="w-full">
+          <DialogFooter className="flex-col gap-2 sm:flex-row mt-4">
+            <Button variant="outline" className="flex-1" onClick={handlePrint}>
+              <Printer className="w-4 h-4 mr-2" /> Print Receipt
+            </Button>
+            <Button className="flex-1" onClick={() => setShowReceipt(false)}>
               New Sale
             </Button>
           </DialogFooter>
@@ -315,7 +411,6 @@ export default function POS() {
   );
 }
 
-// Simple internal icon for fallback
 function PillIcon(props: any) {
   return <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z"/><path d="m8.5 8.5 7 7"/></svg>;
 }

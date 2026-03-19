@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { salesTable, saleItemsTable, medicinesTable } from "@workspace/db/schema";
-import { eq, gte, lte, sql, and } from "drizzle-orm";
+import { eq, gte, lte, sql, and, or } from "drizzle-orm";
 
 const router = Router();
 
@@ -9,26 +9,15 @@ function getDateRange(period: string): { startDate: Date; endDate: Date } {
   const now = new Date();
   const endDate = new Date(now);
   endDate.setHours(23, 59, 59, 999);
-
   let startDate = new Date(now);
   startDate.setHours(0, 0, 0, 0);
-
   switch (period) {
-    case "today":
-      break;
-    case "week":
-      startDate.setDate(now.getDate() - 7);
-      break;
-    case "month":
-      startDate.setMonth(now.getMonth() - 1);
-      break;
-    case "year":
-      startDate.setFullYear(now.getFullYear() - 1);
-      break;
-    default:
-      startDate.setDate(now.getDate() - 30);
+    case "today": break;
+    case "week": startDate.setDate(now.getDate() - 7); break;
+    case "month": startDate.setMonth(now.getMonth() - 1); break;
+    case "year": startDate.setFullYear(now.getFullYear() - 1); break;
+    default: startDate.setDate(now.getDate() - 30);
   }
-
   return { startDate, endDate };
 }
 
@@ -36,28 +25,19 @@ router.get("/sales-summary", async (req, res) => {
   const period = (req.query.period as string) || "month";
   const { startDate, endDate } = getDateRange(period);
 
-  const sales = await db
-    .select()
-    .from(salesTable)
-    .where(
-      and(
-        gte(salesTable.createdAt, startDate),
-        lte(salesTable.createdAt, endDate),
-        eq(salesTable.status, "completed")
-      )
-    );
+  const sales = await db.select().from(salesTable).where(
+    and(gte(salesTable.createdAt, startDate), lte(salesTable.createdAt, endDate), eq(salesTable.status, "completed"))
+  );
 
-  const totalRevenue = sales.reduce((sum, s) => sum + parseFloat(s.totalAmount as string), 0);
+  const totalRevenue = sales.reduce((sum, s) => sum + parseFloat(s.paidAmount as string), 0);
   const totalTransactions = sales.length;
   const averageTransaction = totalTransactions > 0 ? totalRevenue / totalTransactions : 0;
 
-  // Build daily breakdown
   const dailyMap = new Map<string, { revenue: number; transactions: number }>();
-
   for (const sale of sales) {
     const date = sale.createdAt.toISOString().split("T")[0];
     const existing = dailyMap.get(date) || { revenue: 0, transactions: 0 };
-    existing.revenue += parseFloat(sale.totalAmount as string);
+    existing.revenue += parseFloat(sale.paidAmount as string);
     existing.transactions += 1;
     dailyMap.set(date, existing);
   }
@@ -73,42 +53,17 @@ router.get("/top-medicines", async (req, res) => {
   const period = (req.query.period as string) || "month";
   const { startDate, endDate } = getDateRange(period);
 
-  const salesInRange = await db
-    .select()
-    .from(salesTable)
-    .where(
-      and(
-        gte(salesTable.createdAt, startDate),
-        lte(salesTable.createdAt, endDate),
-        eq(salesTable.status, "completed")
-      )
-    );
+  const salesInRange = await db.select().from(salesTable).where(
+    and(gte(salesTable.createdAt, startDate), lte(salesTable.createdAt, endDate), eq(salesTable.status, "completed"))
+  );
 
-  if (salesInRange.length === 0) {
-    res.json([]);
-    return;
-  }
+  if (salesInRange.length === 0) { res.json([]); return; }
 
-  const saleIds = salesInRange.map((s) => s.id);
-
-  // Aggregate by medicine
-  const medicineMap = new Map<
-    number,
-    { medicineName: string; quantitySold: number; revenue: number }
-  >();
-
-  for (const saleId of saleIds) {
-    const items = await db
-      .select()
-      .from(saleItemsTable)
-      .where(eq(saleItemsTable.saleId, saleId));
-
+  const medicineMap = new Map<number, { medicineName: string; quantitySold: number; revenue: number }>();
+  for (const sale of salesInRange) {
+    const items = await db.select().from(saleItemsTable).where(eq(saleItemsTable.saleId, sale.id));
     for (const item of items) {
-      const existing = medicineMap.get(item.medicineId) || {
-        medicineName: item.medicineName,
-        quantitySold: 0,
-        revenue: 0,
-      };
+      const existing = medicineMap.get(item.medicineId) || { medicineName: item.medicineName, quantitySold: 0, revenue: 0 };
       existing.quantitySold += item.quantity;
       existing.revenue += parseFloat(item.total as string);
       medicineMap.set(item.medicineId, existing);
@@ -128,23 +83,58 @@ router.get("/expiring-medicines", async (req, res) => {
   const today = new Date();
   const futureDate = new Date();
   futureDate.setDate(today.getDate() + days);
-
   const todayStr = today.toISOString().split("T")[0];
   const futureDateStr = futureDate.toISOString().split("T")[0];
 
-  const medicines = await db
-    .select()
-    .from(medicinesTable)
-    .where(
-      and(
-        sql`${medicinesTable.expiryDate} IS NOT NULL`,
-        sql`${medicinesTable.expiryDate} <= ${futureDateStr}`,
-        sql`${medicinesTable.expiryDate} >= ${todayStr}`
-      )
+  const medicines = await db.select().from(medicinesTable).where(
+    and(
+      sql`${medicinesTable.expiryDate} IS NOT NULL`,
+      sql`${medicinesTable.expiryDate} <= ${futureDateStr}`,
+      sql`${medicinesTable.expiryDate} >= ${todayStr}`
     )
-    .orderBy(medicinesTable.expiryDate);
+  ).orderBy(medicinesTable.expiryDate);
 
   res.json(medicines);
+});
+
+router.get("/alerts", async (_req, res) => {
+  const allMedicines = await db.select().from(medicinesTable).where(eq(medicinesTable.isActive, true));
+
+  const lowStock = allMedicines.filter(m => m.stockQuantity <= m.minStockLevel);
+
+  const today = new Date();
+  const todayStr = today.toISOString().split("T")[0];
+  const thirtyDaysLater = new Date();
+  thirtyDaysLater.setDate(today.getDate() + 30);
+  const thirtyDaysStr = thirtyDaysLater.toISOString().split("T")[0];
+
+  const expired = allMedicines.filter(m => m.expiryDate && m.expiryDate < todayStr);
+  const expiringSoon = allMedicines.filter(m => m.expiryDate && m.expiryDate >= todayStr && m.expiryDate <= thirtyDaysStr);
+
+  // Credit alerts - customers with outstanding balance > 0
+  const creditSales = await db.select().from(salesTable).where(
+    or(eq(salesTable.paymentStatus, "credit"), eq(salesTable.paymentStatus, "partial"))!
+  );
+
+  const customerCreditMap = new Map<number, number>();
+  for (const sale of creditSales) {
+    if (sale.customerId) {
+      const existing = customerCreditMap.get(sale.customerId) || 0;
+      customerCreditMap.set(sale.customerId, existing + parseFloat(sale.creditAmount as string));
+    }
+  }
+
+  const { customersTable } = await import("@workspace/db/schema");
+  const creditAlerts = await Promise.all(
+    Array.from(customerCreditMap.entries())
+      .filter(([, outstanding]) => outstanding > 0)
+      .map(async ([customerId, outstanding]) => {
+        const [cust] = await db.select().from(customersTable).where(eq(customersTable.id, customerId));
+        return { customerId, customerName: cust?.name ?? "Unknown", outstanding };
+      })
+  );
+
+  res.json({ lowStock, expiringSoon, expired, creditAlerts });
 });
 
 export default router;
