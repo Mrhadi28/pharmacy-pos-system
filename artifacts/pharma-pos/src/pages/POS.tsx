@@ -3,15 +3,16 @@ import {
   useGetMedicines,
   useCreateSale,
   useGetCustomers,
-  useGetSale,
+  useCreateCustomer,
   CreateSaleInputPaymentMethod
 } from "@workspace/api-client-react";
+import type { Medicine, Customer, Sale, SaleItem } from "@workspace/api-client-react";
 import { useCart } from "@/store/use-cart";
 import { useAuth } from "@/hooks/use-auth";
 import { formatPKR } from "@/lib/format";
 import {
   Search, Plus, Minus, Trash2, ShoppingCart, CreditCard, Banknote,
-  Smartphone, ReceiptText, AlertCircle, Printer, Download, User, BookOpen
+  Smartphone, ReceiptText, Printer, User, BookOpen, UserPlus
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,35 +23,91 @@ import { toast } from "@/hooks/use-toast";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
+import { useQueryClient } from "@tanstack/react-query";
+
+interface CompletedSale extends Sale {
+  pharmacyName?: string;
+  pharmacyPhone?: string;
+  pharmacyAddress?: string;
+  cashierName?: string;
+}
 
 export default function POS() {
   const [searchTerm, setSearchTerm] = useState("");
   const [showReceipt, setShowReceipt] = useState(false);
-  const [completedSale, setCompletedSale] = useState<any>(null);
+  const [completedSale, setCompletedSale] = useState<CompletedSale | null>(null);
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
+
+  // Inline customer capture
+  const [inlineCustomerName, setInlineCustomerName] = useState("");
+  const [inlineCustomerPhone, setInlineCustomerPhone] = useState("");
+  const [showInlineCapture, setShowInlineCapture] = useState(false);
+
   const receiptRef = useRef<HTMLDivElement>(null);
 
   const { pharmacy, user } = useAuth();
   const { data: medicines = [], isLoading } = useGetMedicines();
-  const { data: customers = [] } = useGetCustomers();
+  const { data: customers = [], refetch: refetchCustomers } = useGetCustomers();
   const { mutate: createSale, isPending: isCheckingOut } = useCreateSale();
+  const { mutate: createCustomer } = useCreateCustomer();
+  const queryClient = useQueryClient();
 
   const cart = useCart();
 
+  const typedMedicines = medicines as Medicine[];
+  const typedCustomers = customers as Customer[];
+
   const filteredMedicines = useMemo(() => {
-    const activeMeds = medicines.filter((m: any) => m.isActive !== false);
+    const activeMeds = typedMedicines.filter((m: Medicine) => (m as Medicine & { isActive?: boolean }).isActive !== false);
     if (!searchTerm) return activeMeds;
     const q = searchTerm.toLowerCase();
-    return activeMeds.filter((m: any) =>
+    return activeMeds.filter((m: Medicine) =>
       m.name.toLowerCase().includes(q) ||
       (m.genericName && m.genericName.toLowerCase().includes(q)) ||
-      (m.barcode && m.barcode.includes(searchTerm))
+      ((m as Medicine & { barcode?: string }).barcode && (m as Medicine & { barcode?: string }).barcode!.includes(searchTerm))
     );
-  }, [medicines, searchTerm]);
+  }, [typedMedicines, searchTerm]);
 
   const isCredit = cart.paymentMethod === "credit";
 
-  const handleCheckout = () => {
+  const findOrCreateCustomer = async (): Promise<number | null> => {
+    if (selectedCustomerId) return selectedCustomerId;
+
+    if (!inlineCustomerName && !inlineCustomerPhone) return null;
+
+    if (!inlineCustomerPhone || inlineCustomerPhone.length < 7) {
+      toast({ title: "Phone number required for customer capture", variant: "destructive" });
+      return null;
+    }
+
+    // Check if customer already exists by phone
+    const existingCustomer = typedCustomers.find((c: Customer) =>
+      c.phone === inlineCustomerPhone || c.phone.replace(/\s/g, "") === inlineCustomerPhone.replace(/\s/g, "")
+    );
+
+    if (existingCustomer) {
+      return existingCustomer.id;
+    }
+
+    // Create new customer
+    return new Promise((resolve) => {
+      createCustomer({
+        data: {
+          name: inlineCustomerName || `Customer (${inlineCustomerPhone})`,
+          phone: inlineCustomerPhone,
+        }
+      }, {
+        onSuccess: (newCust: Customer) => {
+          queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
+          toast({ title: "New customer added!", description: `${newCust.name} saved to customers list` });
+          resolve(newCust.id);
+        },
+        onError: () => resolve(null),
+      });
+    });
+  };
+
+  const handleCheckout = async () => {
     if (cart.items.length === 0) {
       toast({ title: "Cart is empty", variant: "destructive" });
       return;
@@ -59,10 +116,21 @@ export default function POS() {
       toast({ title: "Enter paid amount", variant: "destructive" });
       return;
     }
+    if (isCredit && !selectedCustomerId && !inlineCustomerName) {
+      toast({ title: "Customer required for Khata sale", variant: "destructive" });
+      return;
+    }
+
+    const customerId = await findOrCreateCustomer();
+
+    if (isCredit && !customerId) {
+      toast({ title: "Please select or enter a customer for Khata sale", variant: "destructive" });
+      return;
+    }
 
     createSale({
       data: {
-        customerId: selectedCustomerId ?? undefined,
+        customerId: customerId ?? undefined,
         items: cart.items.map(i => ({
           medicineId: i.medicine.id,
           quantity: i.quantity,
@@ -73,14 +141,17 @@ export default function POS() {
         discount: cart.globalDiscount,
       }
     }, {
-      onSuccess: (data) => {
+      onSuccess: (data: Sale) => {
         setCompletedSale({ ...data, pharmacyName: pharmacy?.name, pharmacyPhone: pharmacy?.phone, pharmacyAddress: pharmacy?.address, cashierName: user?.fullName });
         setShowReceipt(true);
         cart.clearCart();
         setSelectedCustomerId(null);
+        setInlineCustomerName("");
+        setInlineCustomerPhone("");
+        setShowInlineCapture(false);
         toast({ title: isCredit ? "Khata sale recorded!" : "Sale completed!" });
       },
-      onError: (err: any) => {
+      onError: (err: Error) => {
         toast({ title: "Checkout failed", description: err.message, variant: "destructive" });
       }
     });
@@ -113,12 +184,14 @@ export default function POS() {
       </head>
       <body>
         ${printContent.innerHTML}
-        <script>window.print(); window.onafterprint = function(){ window.close(); }</script>
+        <script>window.print(); window.onafterprint = function(){ window.close(); }<\/script>
       </body>
       </html>
     `);
     win.document.close();
   };
+
+  const selectedCustomer = selectedCustomerId ? typedCustomers.find((c: Customer) => c.id === selectedCustomerId) : null;
 
   return (
     <div className="h-[calc(100vh-8rem)] flex flex-col lg:flex-row gap-4">
@@ -150,7 +223,7 @@ export default function POS() {
             </div>
           ) : (
             <div className="grid grid-cols-2 xl:grid-cols-3 gap-3 pb-10">
-              {filteredMedicines.map((med: any) => (
+              {filteredMedicines.map((med: Medicine) => (
                 <Card
                   key={med.id}
                   className={`cursor-pointer transition-all duration-200 border-border hover:border-primary hover:shadow-lg
@@ -197,20 +270,70 @@ export default function POS() {
         </div>
 
         {/* Customer Selection */}
-        <div className="px-4 py-2 bg-muted/30 border-b border-border">
+        <div className="px-4 py-2 bg-muted/30 border-b border-border space-y-2">
           <div className="flex items-center gap-2">
             <User className="w-4 h-4 text-muted-foreground flex-shrink-0" />
             <select
               className="flex-1 bg-transparent text-sm text-foreground border-none outline-none py-1"
               value={selectedCustomerId ?? ""}
-              onChange={e => setSelectedCustomerId(e.target.value ? parseInt(e.target.value) : null)}
+              onChange={e => {
+                const val = e.target.value;
+                setSelectedCustomerId(val ? parseInt(val) : null);
+                if (val) {
+                  setShowInlineCapture(false);
+                  setInlineCustomerName("");
+                  setInlineCustomerPhone("");
+                }
+              }}
             >
               <option value="">Walk-in Customer</option>
-              {customers.map((c: any) => (
+              {typedCustomers.map((c: Customer) => (
                 <option key={c.id} value={c.id}>{c.name} — {c.phone}</option>
               ))}
             </select>
+            {!selectedCustomerId && (
+              <button
+                title="Add new customer"
+                onClick={() => setShowInlineCapture(v => !v)}
+                className={`p-1.5 rounded-lg transition-colors ${showInlineCapture ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+              >
+                <UserPlus className="w-4 h-4" />
+              </button>
+            )}
           </div>
+
+          {/* Inline customer capture fields */}
+          {showInlineCapture && !selectedCustomerId && (
+            <div className="space-y-2 pb-1">
+              <div className="grid grid-cols-2 gap-2">
+                <Input
+                  placeholder="Customer name"
+                  className="h-8 text-xs"
+                  value={inlineCustomerName}
+                  onChange={e => setInlineCustomerName(e.target.value)}
+                />
+                <Input
+                  placeholder="Phone number"
+                  className="h-8 text-xs"
+                  value={inlineCustomerPhone}
+                  onChange={e => setInlineCustomerPhone(e.target.value)}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Customer will be auto-saved when sale is completed
+              </p>
+            </div>
+          )}
+
+          {selectedCustomer && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground pb-1">
+              <div className="w-5 h-5 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-[10px]">
+                {selectedCustomer.name[0].toUpperCase()}
+              </div>
+              <span className="font-medium text-foreground">{selectedCustomer.name}</span>
+              <span>{selectedCustomer.phone}</span>
+            </div>
+          )}
         </div>
 
         <ScrollArea className="flex-1 bg-muted/10">
@@ -280,7 +403,7 @@ export default function POS() {
               ].map(method => (
                 <button
                   key={method.id}
-                  onClick={() => cart.setPaymentMethod(method.id as any)}
+                  onClick={() => cart.setPaymentMethod(method.id as CreateSaleInputPaymentMethod)}
                   className={`flex flex-col items-center justify-center p-1.5 rounded-xl border text-xs font-medium transition-all
                     ${cart.paymentMethod === method.id
                       ? method.id === 'credit' ? 'border-orange-400 bg-orange-50 text-orange-600 shadow-sm' : 'border-primary bg-primary/10 text-primary shadow-sm'
@@ -299,7 +422,11 @@ export default function POS() {
                   <BookOpen className="w-4 h-4" /> Khata (Credit) Sale
                 </p>
                 <p className="text-xs mt-0.5">Full amount will be added to customer's khata balance</p>
-                {!selectedCustomerId && <p className="text-xs mt-1 font-semibold text-orange-600">⚠ Please select a customer for khata</p>}
+                {!selectedCustomerId && !inlineCustomerName && (
+                  <p className="text-xs mt-1 font-semibold text-orange-600">
+                    Select a customer or enter name above for khata
+                  </p>
+                )}
               </div>
             ) : (
               <div className="flex items-center gap-2">
@@ -325,7 +452,12 @@ export default function POS() {
 
             <Button
               className="w-full h-12 text-base font-bold shadow-lg shadow-primary/25 rounded-xl"
-              disabled={cart.items.length === 0 || (!isCredit && cart.paidAmount <= 0) || isCheckingOut || (isCredit && !selectedCustomerId)}
+              disabled={
+                cart.items.length === 0 ||
+                (!isCredit && cart.paidAmount <= 0) ||
+                isCheckingOut ||
+                (isCredit && !selectedCustomerId && !inlineCustomerName)
+              }
               onClick={handleCheckout}
             >
               {isCheckingOut ? "Processing..." : isCredit ? "Add to Khata" : "Checkout"}
@@ -360,37 +492,37 @@ export default function POS() {
             <div className="flex justify-between font-bold text-xs text-gray-500 mb-1">
               <span className="flex-1">Item</span><span className="w-8 text-center">Qty</span><span className="w-14 text-right">Price</span><span className="w-16 text-right">Total</span>
             </div>
-            {(completedSale?.items || []).map((item: any, i: number) => (
+            {(completedSale?.items || []).map((item: SaleItem, i: number) => (
               <div key={i} className="item-row">
                 <span className="flex-1 truncate">{item.medicineName}</span>
                 <span className="w-8 text-center">{item.quantity}</span>
-                <span className="w-14 text-right">{formatPKR(parseFloat(item.unitPrice))}</span>
-                <span className="w-16 text-right font-semibold">{formatPKR(parseFloat(item.total))}</span>
+                <span className="w-14 text-right">{formatPKR(item.unitPrice)}</span>
+                <span className="w-16 text-right font-semibold">{formatPKR(item.total)}</span>
               </div>
             ))}
             <div className="divider border-t border-dashed border-gray-400 my-1" />
-            {parseFloat(completedSale?.discount || "0") > 0 && (
-              <div className="flex justify-between text-gray-600"><span>Discount</span><span>-{formatPKR(parseFloat(completedSale?.discount))}</span></div>
+            {(completedSale?.discount ?? 0) > 0 && (
+              <div className="flex justify-between text-gray-600"><span>Discount</span><span>-{formatPKR(completedSale!.discount)}</span></div>
             )}
             <div className="total-row flex justify-between font-bold text-sm">
-              <span>Total</span><span>{formatPKR(parseFloat(completedSale?.totalAmount || "0"))}</span>
+              <span>Total</span><span>{formatPKR(completedSale?.totalAmount ?? 0)}</span>
             </div>
             {completedSale?.paymentStatus !== "credit" && (
               <>
-                <div className="flex justify-between text-gray-600"><span>Paid ({completedSale?.paymentMethod?.toUpperCase()})</span><span>{formatPKR(parseFloat(completedSale?.paidAmount || "0"))}</span></div>
-                {parseFloat(completedSale?.changeAmount || "0") > 0 && (
-                  <div className="flex justify-between text-gray-600"><span>Change</span><span>{formatPKR(parseFloat(completedSale?.changeAmount))}</span></div>
+                <div className="flex justify-between text-gray-600"><span>Paid ({completedSale?.paymentMethod?.toUpperCase()})</span><span>{formatPKR(completedSale?.paidAmount ?? 0)}</span></div>
+                {(completedSale?.changeAmount ?? 0) > 0 && (
+                  <div className="flex justify-between text-gray-600"><span>Change</span><span>{formatPKR(completedSale!.changeAmount)}</span></div>
                 )}
               </>
             )}
             {completedSale?.paymentStatus === "credit" && (
               <div className="flex justify-between font-bold text-red-600 text-sm">
-                <span>KHATA (Credit)</span><span>{formatPKR(parseFloat(completedSale?.creditAmount || completedSale?.totalAmount || "0"))}</span>
+                <span>KHATA (Credit)</span><span>{formatPKR(completedSale?.creditAmount || completedSale?.totalAmount || 0)}</span>
               </div>
             )}
             {completedSale?.paymentStatus === "partial" && (
               <div className="flex justify-between font-bold text-orange-600 text-sm">
-                <span>Outstanding</span><span>{formatPKR(parseFloat(completedSale?.creditAmount || "0"))}</span>
+                <span>Outstanding</span><span>{formatPKR(completedSale?.creditAmount ?? 0)}</span>
               </div>
             )}
             <div className="divider border-t border-dashed border-gray-400 my-1" />
@@ -411,6 +543,6 @@ export default function POS() {
   );
 }
 
-function PillIcon(props: any) {
+function PillIcon(props: React.SVGProps<SVGSVGElement>) {
   return <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z"/><path d="m8.5 8.5 7 7"/></svg>;
 }

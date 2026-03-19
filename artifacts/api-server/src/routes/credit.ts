@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { salesTable, saleItemsTable, customersTable, creditPaymentsTable } from "@workspace/db/schema";
+import { salesTable, saleItemsTable, customersTable, creditPaymentsTable, manualCreditEntriesTable, manualCreditPaymentsTable } from "@workspace/db/schema";
 import { eq, and, or, sql } from "drizzle-orm";
 
 const router = Router();
@@ -32,6 +32,124 @@ router.get("/", async (req, res) => {
   );
 
   res.json(result.reverse());
+});
+
+// Get all manual credit entries
+router.get("/manual", async (_req, res) => {
+  const entries = await db.select().from(manualCreditEntriesTable).orderBy(manualCreditEntriesTable.createdAt);
+  res.json(entries.reverse());
+});
+
+// Get single manual credit entry with payment history
+router.get("/manual/:id", async (req, res) => {
+  const id = parseInt(req.params.id);
+  const [entry] = await db.select().from(manualCreditEntriesTable).where(eq(manualCreditEntriesTable.id, id));
+  if (!entry) {
+    res.status(404).json({ error: "Entry not found" });
+    return;
+  }
+
+  const payments = await db.select().from(manualCreditPaymentsTable)
+    .where(eq(manualCreditPaymentsTable.entryId, id))
+    .orderBy(manualCreditPaymentsTable.createdAt);
+
+  const totalPaid = payments.reduce((sum, p) => sum + parseFloat(p.amountPaid as string), 0);
+  const outstanding = Math.max(0, parseFloat(entry.amount as string) - totalPaid);
+
+  res.json({ ...entry, payments, totalPaid, outstanding });
+});
+
+// Create a manual credit entry
+router.post("/manual", async (req, res) => {
+  const { customerName, customerId, amount, dueDate, notes, status } = req.body;
+
+  if (!customerName || !amount || parseFloat(amount) <= 0) {
+    res.status(400).json({ error: "Customer name and amount are required" });
+    return;
+  }
+
+  const [entry] = await db.insert(manualCreditEntriesTable).values({
+    customerName,
+    customerId: customerId ?? null,
+    amount: parseFloat(amount).toFixed(2),
+    paidAmount: "0",
+    dueDate: dueDate ?? null,
+    notes: notes ?? null,
+    status: status || "unpaid",
+  }).returning();
+
+  res.status(201).json(entry);
+});
+
+// Record a payment against a manual credit entry
+router.post("/manual/:id/pay", async (req, res) => {
+  const id = parseInt(req.params.id);
+  const { amountPaid, paymentMethod = "cash", notes } = req.body;
+
+  if (!amountPaid || parseFloat(amountPaid) <= 0) {
+    res.status(400).json({ error: "Invalid payment amount" });
+    return;
+  }
+
+  const [entry] = await db.select().from(manualCreditEntriesTable).where(eq(manualCreditEntriesTable.id, id));
+  if (!entry) {
+    res.status(404).json({ error: "Entry not found" });
+    return;
+  }
+
+  // Insert the payment record
+  const [payment] = await db.insert(manualCreditPaymentsTable).values({
+    entryId: id,
+    amountPaid: parseFloat(amountPaid).toFixed(2),
+    paymentMethod,
+    notes: notes ?? null,
+  }).returning();
+
+  // Recalculate total paid from payments table
+  const allPayments = await db.select().from(manualCreditPaymentsTable)
+    .where(eq(manualCreditPaymentsTable.entryId, id));
+  const totalPaid = allPayments.reduce((sum, p) => sum + parseFloat(p.amountPaid as string), 0);
+  const entryAmount = parseFloat(entry.amount as string);
+  const outstanding = Math.max(0, entryAmount - totalPaid);
+  const newStatus = outstanding <= 0 ? "paid" : entry.status === "overdue" ? "overdue" : "unpaid";
+
+  // Update entry
+  const [updatedEntry] = await db.update(manualCreditEntriesTable).set({
+    paidAmount: Math.min(totalPaid, entryAmount).toFixed(2),
+    status: newStatus,
+    updatedAt: new Date(),
+  }).where(eq(manualCreditEntriesTable.id, id)).returning();
+
+  res.json({ ...updatedEntry, payments: allPayments, totalPaid, outstanding, latestPayment: payment });
+});
+
+// Update manual credit entry status or notes
+router.patch("/manual/:id", async (req, res) => {
+  const id = parseInt(req.params.id);
+  const { status, notes, dueDate } = req.body;
+
+  const updateData: Record<string, unknown> = { updatedAt: new Date() };
+  if (status !== undefined) updateData.status = status;
+  if (notes !== undefined) updateData.notes = notes;
+  if (dueDate !== undefined) updateData.dueDate = dueDate;
+
+  const [entry] = await db.update(manualCreditEntriesTable).set(updateData).where(eq(manualCreditEntriesTable.id, id)).returning();
+
+  if (!entry) {
+    res.status(404).json({ error: "Entry not found" });
+    return;
+  }
+
+  res.json(entry);
+});
+
+// Delete manual credit entry
+router.delete("/manual/:id", async (req, res) => {
+  const id = parseInt(req.params.id);
+  // Delete payments first (cascade not guaranteed in all setups)
+  await db.delete(manualCreditPaymentsTable).where(eq(manualCreditPaymentsTable.entryId, id));
+  await db.delete(manualCreditEntriesTable).where(eq(manualCreditEntriesTable.id, id));
+  res.json({ success: true });
 });
 
 // Get customer credit summary
@@ -68,7 +186,7 @@ router.get("/customer/:customerId", async (req, res) => {
   });
 });
 
-// Record a credit payment
+// Record a credit payment for a POS sale
 router.post("/:saleId/pay", async (req, res) => {
   const saleId = parseInt(req.params.saleId);
   const { amountPaid, paymentMethod = "cash", notes } = req.body;
