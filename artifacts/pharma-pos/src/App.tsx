@@ -15,6 +15,7 @@ import Purchases from "@/pages/Purchases";
 import Reports from "@/pages/Reports";
 import Khata from "@/pages/Khata";
 import Users from "@/pages/Users";
+import Transactions from "@/pages/Transactions";
 import Login from "@/pages/Login";
 import NotFound from "@/pages/not-found";
 
@@ -57,6 +58,7 @@ function AppRoutes() {
         <Route path="/reports" component={Reports} />
         <Route path="/khata" component={Khata} />
         <Route path="/users" component={Users} />
+        <Route path="/transactions" component={Transactions} />
         <Route component={NotFound} />
       </Switch>
     </AppLayout>

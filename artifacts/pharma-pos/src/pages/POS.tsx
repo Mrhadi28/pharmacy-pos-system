@@ -4,6 +4,7 @@ import {
   useCreateSale,
   useGetCustomers,
   useCreateCustomer,
+  useUpdateCustomer,
   CreateSaleInputPaymentMethod
 } from "@workspace/api-client-react";
 import type { Medicine, Customer, Sale, SaleItem } from "@workspace/api-client-react";
@@ -12,7 +13,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { formatPKR } from "@/lib/format";
 import {
   Search, Plus, Minus, Trash2, ShoppingCart, CreditCard, Banknote,
-  Smartphone, ReceiptText, Printer, User, BookOpen, UserPlus
+  Smartphone, ReceiptText, Printer, User, BookOpen
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,6 +31,7 @@ interface CompletedSale extends Sale {
   pharmacyPhone?: string;
   pharmacyAddress?: string;
   cashierName?: string;
+  customerPhone?: string;
 }
 
 export default function POS() {
@@ -41,7 +43,6 @@ export default function POS() {
   // Inline customer capture
   const [inlineCustomerName, setInlineCustomerName] = useState("");
   const [inlineCustomerPhone, setInlineCustomerPhone] = useState("");
-  const [showInlineCapture, setShowInlineCapture] = useState(false);
 
   const receiptRef = useRef<HTMLDivElement>(null);
 
@@ -50,6 +51,7 @@ export default function POS() {
   const { data: customers = [], refetch: refetchCustomers } = useGetCustomers();
   const { mutate: createSale, isPending: isCheckingOut } = useCreateSale();
   const { mutate: createCustomer } = useCreateCustomer();
+  const { mutate: updateCustomer } = useUpdateCustomer();
   const queryClient = useQueryClient();
 
   const cart = useCart();
@@ -70,8 +72,11 @@ export default function POS() {
 
   const isCredit = cart.paymentMethod === "credit";
 
-  const findOrCreateCustomer = async (): Promise<number | null> => {
-    if (selectedCustomerId) return selectedCustomerId;
+  const findOrCreateCustomer = async (): Promise<{ id: number; phone: string } | null> => {
+    if (selectedCustomerId) {
+      const cust = typedCustomers.find((c: Customer) => c.id === selectedCustomerId);
+      return cust ? { id: cust.id, phone: cust.phone } : { id: selectedCustomerId, phone: "" };
+    }
 
     if (!inlineCustomerName && !inlineCustomerPhone) return null;
 
@@ -81,12 +86,24 @@ export default function POS() {
     }
 
     // Check if customer already exists by phone
+    const normalizedPhone = inlineCustomerPhone.replace(/\s/g, "");
     const existingCustomer = typedCustomers.find((c: Customer) =>
-      c.phone === inlineCustomerPhone || c.phone.replace(/\s/g, "") === inlineCustomerPhone.replace(/\s/g, "")
+      c.phone.replace(/\s/g, "") === normalizedPhone
     );
 
     if (existingCustomer) {
-      return existingCustomer.id;
+      // If the user provided a different name, update the customer record
+      if (inlineCustomerName && inlineCustomerName.trim() !== existingCustomer.name.trim()) {
+        updateCustomer(
+          { id: existingCustomer.id, data: { name: inlineCustomerName } },
+          {
+            onSuccess: () => {
+              queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
+            },
+          }
+        );
+      }
+      return { id: existingCustomer.id, phone: existingCustomer.phone };
     }
 
     // Create new customer
@@ -100,7 +117,7 @@ export default function POS() {
         onSuccess: (newCust: Customer) => {
           queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
           toast({ title: "New customer added!", description: `${newCust.name} saved to customers list` });
-          resolve(newCust.id);
+          resolve({ id: newCust.id, phone: newCust.phone });
         },
         onError: () => resolve(null),
       });
@@ -121,16 +138,19 @@ export default function POS() {
       return;
     }
 
-    const customerId = await findOrCreateCustomer();
+    const customerResult = await findOrCreateCustomer();
 
-    if (isCredit && !customerId) {
+    if (isCredit && !customerResult) {
       toast({ title: "Please select or enter a customer for Khata sale", variant: "destructive" });
       return;
     }
 
+    // Capture phone for the receipt before clearing state
+    const capturedPhone = customerResult?.phone || inlineCustomerPhone || "";
+
     createSale({
       data: {
-        customerId: customerId ?? undefined,
+        customerId: customerResult?.id ?? undefined,
         items: cart.items.map(i => ({
           medicineId: i.medicine.id,
           quantity: i.quantity,
@@ -142,13 +162,19 @@ export default function POS() {
       }
     }, {
       onSuccess: (data: Sale) => {
-        setCompletedSale({ ...data, pharmacyName: pharmacy?.name, pharmacyPhone: pharmacy?.phone, pharmacyAddress: pharmacy?.address, cashierName: user?.fullName });
+        setCompletedSale({
+          ...data,
+          pharmacyName: pharmacy?.name,
+          pharmacyPhone: pharmacy?.phone,
+          pharmacyAddress: pharmacy?.address,
+          cashierName: user?.fullName,
+          customerPhone: capturedPhone,
+        });
         setShowReceipt(true);
         cart.clearCart();
         setSelectedCustomerId(null);
         setInlineCustomerName("");
         setInlineCustomerPhone("");
-        setShowInlineCapture(false);
         toast({ title: isCredit ? "Khata sale recorded!" : "Sale completed!" });
       },
       onError: (err: Error) => {
@@ -280,7 +306,6 @@ export default function POS() {
                 const val = e.target.value;
                 setSelectedCustomerId(val ? parseInt(val) : null);
                 if (val) {
-                  setShowInlineCapture(false);
                   setInlineCustomerName("");
                   setInlineCustomerPhone("");
                 }
@@ -291,19 +316,10 @@ export default function POS() {
                 <option key={c.id} value={c.id}>{c.name} — {c.phone}</option>
               ))}
             </select>
-            {!selectedCustomerId && (
-              <button
-                title="Add new customer"
-                onClick={() => setShowInlineCapture(v => !v)}
-                className={`p-1.5 rounded-lg transition-colors ${showInlineCapture ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
-              >
-                <UserPlus className="w-4 h-4" />
-              </button>
-            )}
           </div>
 
-          {/* Inline customer capture fields */}
-          {showInlineCapture && !selectedCustomerId && (
+          {/* Inline customer capture fields — always visible for walk-in customers */}
+          {!selectedCustomerId && (
             <div className="space-y-2 pb-1">
               <div className="grid grid-cols-2 gap-2">
                 <Input
@@ -486,7 +502,12 @@ export default function POS() {
             <div className="divider border-t border-dashed border-gray-400 my-1" />
             <div className="flex justify-between"><span className="text-gray-500">Invoice</span><span className="font-bold">{completedSale?.invoiceNumber}</span></div>
             <div className="flex justify-between"><span className="text-gray-500">Date</span><span>{new Date(completedSale?.createdAt || Date.now()).toLocaleString("en-PK")}</span></div>
-            {completedSale?.customerName && <div className="flex justify-between"><span className="text-gray-500">Customer</span><span className="font-bold">{completedSale.customerName}</span></div>}
+            {completedSale?.customerName && (
+              <div className="flex justify-between"><span className="text-gray-500">Customer</span><span className="font-bold">{completedSale.customerName}</span></div>
+            )}
+            {completedSale?.customerPhone && (
+              <div className="flex justify-between"><span className="text-gray-500">Phone</span><span>{completedSale.customerPhone}</span></div>
+            )}
             {completedSale?.cashierName && <div className="flex justify-between"><span className="text-gray-500">Cashier</span><span>{completedSale.cashierName}</span></div>}
             <div className="divider border-t border-dashed border-gray-400 my-1" />
             <div className="flex justify-between font-bold text-xs text-gray-500 mb-1">

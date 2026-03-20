@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "wouter";
 import { formatPKR } from "@/lib/format";
 import { 
   Activity, 
@@ -8,6 +9,7 @@ import {
   ArrowUpRight,
   ReceiptText,
   Printer,
+  ExternalLink,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent } from "@/components/ui/card";
@@ -370,7 +372,11 @@ export default function Dashboard() {
         <Card className="border-none shadow-md shadow-black/5 flex flex-col">
           <div className="p-6 border-b border-border/50 flex justify-between items-center">
             <h3 className="font-display font-bold text-lg">Recent Transactions</h3>
-            <span className="text-xs text-muted-foreground">Click to view slip</span>
+            <Link href="/transactions">
+              <span className="text-xs text-primary font-medium hover:underline flex items-center gap-1 cursor-pointer">
+                View All Transactions <ExternalLink className="w-3.5 h-3.5" />
+              </span>
+            </Link>
           </div>
           <div className="p-0 flex-1 overflow-y-auto">
             {stats.recentSales.length > 0 ? (

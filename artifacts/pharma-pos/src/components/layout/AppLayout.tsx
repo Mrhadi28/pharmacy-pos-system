@@ -42,6 +42,10 @@ const navItems: NavItem[] = [
   { label: "Staff / Users", href: "/users", icon: UserCog },
 ];
 
+const pageTitles: Record<string, string> = {
+  "/transactions": "Transactions",
+};
+
 export function AppLayout({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const { user, pharmacy, logout } = useAuth();
@@ -201,7 +205,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
       <main className="flex-1 md:ml-64 flex flex-col min-h-screen">
         <header className="hidden md:flex h-16 items-center justify-between px-8 bg-background/80 backdrop-blur-md sticky top-0 z-10 border-b border-border/50">
           <h1 className="font-display text-xl font-bold text-foreground tracking-tight">
-            {navItems.find(i => i.href === location)?.label || "PharmaPOS"}
+            {navItems.find(i => i.href === location)?.label || pageTitles[location] || "PharmaPOS"}
           </h1>
           <div className="flex items-center gap-3">
             <div className="relative">

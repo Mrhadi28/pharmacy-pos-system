@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { TrendingUp, Package, Search, ReceiptText, Printer } from "lucide-react";
+import { TrendingUp, Package, Search, ReceiptText, Printer, Download } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -134,6 +134,116 @@ function getPaymentBadge(status: string, method: string) {
   return <Badge variant="secondary">{(method || "cash").toUpperCase()}</Badge>;
 }
 
+function downloadOverviewPDF(
+  period: PeriodFilter,
+  summary: { totalRevenue?: number; totalTransactions?: number; averageTransaction?: number; dailyBreakdown?: Array<{ date: string; revenue: number }> } | undefined,
+  topMeds: TopMedicine[]
+) {
+  const win = window.open("", "_blank", "width=800,height=700");
+  if (!win) return;
+  const periodLabel = PERIOD_LABELS[period];
+  const dailyRows = (summary?.dailyBreakdown || []).map((d) => `
+    <tr>
+      <td style="padding:4px 8px;border-bottom:1px solid #e5e7eb;">${d.date}</td>
+      <td style="padding:4px 8px;border-bottom:1px solid #e5e7eb;text-align:right;">₨ ${Number(d.revenue).toLocaleString()}</td>
+    </tr>`).join("");
+  const topMedRows = topMeds.map((m) => `
+    <tr>
+      <td style="padding:4px 8px;border-bottom:1px solid #e5e7eb;">${m.medicineName}</td>
+      <td style="padding:4px 8px;border-bottom:1px solid #e5e7eb;text-align:right;">${m.quantitySold}</td>
+      <td style="padding:4px 8px;border-bottom:1px solid #e5e7eb;text-align:right;">₨ ${Number(m.revenue).toLocaleString()}</td>
+    </tr>`).join("");
+  win.document.write(`
+    <html><head><title>Overview Report — ${periodLabel}</title>
+    <style>
+      body { font-family: Arial, sans-serif; font-size: 13px; color: #111; padding: 24px; }
+      h1 { font-size: 22px; margin-bottom: 4px; }
+      h2 { font-size: 16px; margin: 20px 0 8px; color: #374151; }
+      .stats { display: flex; gap: 16px; margin-bottom: 20px; }
+      .stat-box { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 18px; min-width: 140px; }
+      .stat-label { font-size: 11px; color: #6b7280; }
+      .stat-value { font-size: 20px; font-weight: bold; margin-top: 4px; }
+      table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      th { background: #f3f4f6; padding: 6px 8px; text-align: left; font-size: 11px; text-transform: uppercase; }
+      th.right, td.right { text-align: right; }
+      @media print { .no-print { display: none; } }
+    </style></head>
+    <body>
+      <h1>Analytics Overview — ${periodLabel}</h1>
+      <p style="color:#6b7280;font-size:12px;">Generated: ${new Date().toLocaleString("en-PK")}</p>
+      <div class="stats">
+        <div class="stat-box">
+          <div class="stat-label">Total Revenue</div>
+          <div class="stat-value">₨ ${Number(summary?.totalRevenue || 0).toLocaleString()}</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">Transactions</div>
+          <div class="stat-value">${summary?.totalTransactions || 0}</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">Avg Order Value</div>
+          <div class="stat-value">₨ ${Number(summary?.averageTransaction || 0).toLocaleString()}</div>
+        </div>
+      </div>
+      ${dailyRows ? `<h2>Daily Breakdown</h2>
+      <table><thead><tr><th>Date</th><th class="right">Revenue</th></tr></thead>
+      <tbody>${dailyRows}</tbody></table>` : ""}
+      ${topMedRows ? `<h2>Top Selling Medicines</h2>
+      <table><thead><tr><th>Medicine</th><th class="right">Qty Sold</th><th class="right">Revenue</th></tr></thead>
+      <tbody>${topMedRows}</tbody></table>` : ""}
+      <script>window.print(); window.onafterprint = function(){ window.close(); }<\/script>
+    </body></html>
+  `);
+  win.document.close();
+}
+
+function downloadTransactionsPDF(sales: Sale[], startDate: string, endDate: string) {
+  const win = window.open("", "_blank", "width=800,height=700");
+  if (!win) return;
+  const dateLabel = startDate && endDate ? `${startDate} to ${endDate}` : startDate ? `From ${startDate}` : endDate ? `Until ${endDate}` : "All dates";
+  const totalRevenue = sales.reduce((sum, s) => sum + (parseFloat(String(s.paidAmount)) || 0), 0);
+  const rows = sales.map((s) => `
+    <tr>
+      <td style="padding:4px 8px;border-bottom:1px solid #e5e7eb;">${s.invoiceNumber}</td>
+      <td style="padding:4px 8px;border-bottom:1px solid #e5e7eb;">${new Date(s.createdAt).toLocaleString("en-PK")}</td>
+      <td style="padding:4px 8px;border-bottom:1px solid #e5e7eb;">${s.customerName || "Walk-in"}</td>
+      <td style="padding:4px 8px;border-bottom:1px solid #e5e7eb;text-align:right;">₨ ${Number(s.totalAmount).toLocaleString()}</td>
+      <td style="padding:4px 8px;border-bottom:1px solid #e5e7eb;text-align:right;">₨ ${Number(s.paidAmount).toLocaleString()}</td>
+      <td style="padding:4px 8px;border-bottom:1px solid #e5e7eb;">${s.paymentStatus === "credit" ? "Khata" : s.paymentStatus === "partial" ? "Partial" : (s.paymentMethod || "cash").toUpperCase()}</td>
+    </tr>`).join("");
+  win.document.write(`
+    <html><head><title>Transaction History</title>
+    <style>
+      body { font-family: Arial, sans-serif; font-size: 12px; color: #111; padding: 24px; }
+      h1 { font-size: 20px; margin-bottom: 4px; }
+      table { width: 100%; border-collapse: collapse; font-size: 11px; }
+      th { background: #f3f4f6; padding: 6px 8px; text-align: left; font-size: 10px; text-transform: uppercase; }
+      .right { text-align: right; }
+      tfoot td { font-weight: bold; border-top: 2px solid #374151; padding: 6px 8px; }
+      @media print { .no-print { display: none; } }
+    </style></head>
+    <body>
+      <h1>Transaction History</h1>
+      <p style="color:#6b7280;font-size:11px;">${dateLabel} &mdash; Generated: ${new Date().toLocaleString("en-PK")}</p>
+      <p style="margin:8px 0;font-size:12px;">${sales.length} transactions &nbsp;&nbsp; <strong>Total Paid: ₨ ${totalRevenue.toLocaleString()}</strong></p>
+      <table>
+        <thead><tr>
+          <th>Invoice</th><th>Date &amp; Time</th><th>Customer</th>
+          <th class="right">Total</th><th class="right">Paid</th><th>Payment</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot><tr>
+          <td colspan="4">Total (${sales.length} transactions)</td>
+          <td class="right">₨ ${totalRevenue.toLocaleString()}</td>
+          <td></td>
+        </tr></tfoot>
+      </table>
+      <script>window.print(); window.onafterprint = function(){ window.close(); }<\/script>
+    </body></html>
+  `);
+  win.document.close();
+}
+
 export default function Reports() {
   const [period, setPeriod] = useState<PeriodFilter>("month");
   const [txSearch, setTxSearch] = useState("");
@@ -193,6 +303,14 @@ export default function Reports() {
                 {PERIOD_LABELS[p]}
               </button>
             ))}
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-auto"
+              onClick={() => downloadOverviewPDF(period, summary, topMeds as TopMedicine[])}
+            >
+              <Download className="w-4 h-4 mr-1.5" /> Download PDF
+            </Button>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -296,6 +414,13 @@ export default function Reports() {
                       Clear
                     </Button>
                   )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => downloadTransactionsPDF(filteredSales, txStartDate, txEndDate)}
+                  >
+                    <Download className="w-4 h-4 mr-1.5" /> Download PDF
+                  </Button>
                 </div>
               </div>
               {filteredSales.length > 0 && (
