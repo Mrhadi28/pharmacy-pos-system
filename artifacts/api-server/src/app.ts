@@ -70,8 +70,10 @@ const sessionStore =
     : undefined;
 
 app.use(session({
+  name: "pharma.sid",
   secret: process.env.SESSION_SECRET || "pharma-pos-secret-2024",
   store: sessionStore,
+  proxy: process.env.TRUST_PROXY === "1" || process.env.TRUST_PROXY === "true",
   resave: false,
   saveUninitialized: false,
   cookie: {
