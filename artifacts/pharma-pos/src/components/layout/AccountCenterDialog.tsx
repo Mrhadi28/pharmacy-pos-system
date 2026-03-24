@@ -53,18 +53,10 @@ export function AccountCenterDialog({ open, onOpenChange }: Props) {
   const [tab, setTab] = useState<TabKey>("subscription");
   const [loading, setLoading] = useState(false);
   const [overview, setOverview] = useState<OverviewResponse | null>(null);
-  const [submittingPayment, setSubmittingPayment] = useState(false);
+  const [markingPaid, setMarkingPaid] = useState(false);
   const [submittingSupport, setSubmittingSupport] = useState(false);
   const [restoring, setRestoring] = useState(false);
 
-  const [paymentForm, setPaymentForm] = useState({
-    payerName: "",
-    payerPhone: "",
-    transactionRef: "",
-    amountPkr: "12000",
-    note: "",
-    screenshotDataUrl: "",
-  });
   const [supportForm, setSupportForm] = useState({
     subject: "",
     message: "",
@@ -102,55 +94,6 @@ export function AccountCenterDialog({ open, onOpenChange }: Props) {
     if (next) void loadOverview();
   };
 
-  const onScreenshotChange = (file?: File) => {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      setPaymentForm((p) => ({ ...p, screenshotDataUrl: String(reader.result ?? "") }));
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const submitPaymentProof = async () => {
-    if (!overview) return;
-    setSubmittingPayment(true);
-    try {
-      const res = await fetch(`${API_BASE}/account/payment-submission`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          accountTitle: overview.payment.accountTitle,
-          accountNumber: overview.payment.accountNumber,
-          bankName: overview.payment.bankName,
-          amountPkr: Number(paymentForm.amountPkr || overview.plan.amountPkr),
-          transactionRef: paymentForm.transactionRef || undefined,
-          payerName: paymentForm.payerName || undefined,
-          payerPhone: paymentForm.payerPhone || undefined,
-          note: paymentForm.note || undefined,
-          screenshotDataUrl: paymentForm.screenshotDataUrl || undefined,
-        }),
-      });
-      if (!res.ok) throw new Error(await readJsonError(res));
-      const out = (await res.json()) as { mailSent?: boolean };
-      if (out.mailSent) {
-        toast({ title: "Payment proof submitted", description: "Email sent to admin successfully." });
-      } else {
-        toast({
-          title: "Payment saved, email not sent",
-          description: "SMTP config missing/failed. Submission is saved in system.",
-          variant: "destructive",
-        });
-      }
-      await loadOverview();
-      await refresh();
-    } catch (e: any) {
-      toast({ title: "Submit failed", description: e?.message, variant: "destructive" });
-    } finally {
-      setSubmittingPayment(false);
-    }
-  };
-
   const markSubmissionSent = async () => {
     const submissionId = overview?.payment.latestSubmission?.id;
     if (!submissionId) return;
@@ -164,6 +107,24 @@ export function AccountCenterDialog({ open, onOpenChange }: Props) {
       await loadOverview();
     } catch (e: any) {
       toast({ title: "Could not mark sent", description: e?.message, variant: "destructive" });
+    }
+  };
+
+  const markAsPaid = async () => {
+    setMarkingPaid(true);
+    try {
+      const res = await fetch(`${API_BASE}/account/subscription/mark-paid`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await readJsonError(res));
+      toast({ title: "Marked as paid", description: "Subscription is now active for 1 year." });
+      await loadOverview();
+      await refresh();
+    } catch (e: any) {
+      toast({ title: "Could not mark paid", description: e?.message, variant: "destructive" });
+    } finally {
+      setMarkingPaid(false);
     }
   };
 
@@ -258,7 +219,7 @@ export function AccountCenterDialog({ open, onOpenChange }: Props) {
           </DialogHeader>
           <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-4 p-6">
           <div className="space-y-2">
-            <Button variant={tab === "subscription" ? "default" : "outline"} className="w-full justify-start" onClick={() => setTab("subscription")}>Subscription & Payment</Button>
+            <Button variant={tab === "subscription" ? "default" : "outline"} className="w-full justify-start" onClick={() => setTab("subscription")}>Subscription</Button>
             <Button variant={tab === "backup" ? "default" : "outline"} className="w-full justify-start" onClick={() => setTab("backup")}>Backup & Recover</Button>
             <Button variant={tab === "support" ? "default" : "outline"} className="w-full justify-start" onClick={() => setTab("support")}>Support / Contact</Button>
             <Button variant="outline" className="w-full justify-start" onClick={() => void loadOverview()} disabled={loading}>{loading ? "Refreshing..." : "Refresh"}</Button>
@@ -286,17 +247,20 @@ export function AccountCenterDialog({ open, onOpenChange }: Props) {
                 </div>
 
                 <div className="rounded-xl border border-emerald-200 p-4 space-y-3 bg-gradient-to-br from-emerald-50 to-white">
-                  <p className="font-semibold">Bank Payment Details</p>
+                  <p className="font-semibold">Payment module is disabled</p>
+                  <p className="text-sm text-muted-foreground">
+                    Software usage is unlocked. You can continue all daily operations normally.
+                  </p>
                   {overview?.payment.latestSubmission ? (
                     <div className="rounded-lg bg-white border border-emerald-100 p-3 space-y-2 text-sm">
                       <div className="flex items-center justify-between gap-2">
                         <p>
                           <span className="font-medium text-foreground">Latest status:</span>{" "}
-                          <span className={overview.payment.latestSubmission.status === "sent" ? "text-emerald-700" : "text-amber-700"}>
-                            {overview.payment.latestSubmission.status === "sent" ? "Marked as sent" : "Pending"}
+                          <span className={overview.payment.latestSubmission.status === "paid" ? "text-emerald-700" : "text-amber-700"}>
+                            {overview.payment.latestSubmission.status === "paid" ? "Paid" : overview.payment.latestSubmission.status === "sent" ? "Marked as sent" : "Pending"}
                           </span>
                         </p>
-                        {overview.payment.latestSubmission.status !== "sent" ? (
+                        {overview.payment.latestSubmission.status !== "sent" && overview.payment.latestSubmission.status !== "paid" ? (
                           <Button type="button" size="sm" onClick={() => void markSubmissionSent()}>
                             Mark as sent
                           </Button>
@@ -326,19 +290,8 @@ export function AccountCenterDialog({ open, onOpenChange }: Props) {
                       </div>
                     </div>
                   </div>
-                  <Input placeholder="Your name" value={paymentForm.payerName} onChange={(e) => setPaymentForm((p) => ({ ...p, payerName: e.target.value }))} />
-                  <Input placeholder="Your phone" value={paymentForm.payerPhone} onChange={(e) => setPaymentForm((p) => ({ ...p, payerPhone: e.target.value }))} />
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <Input placeholder="Amount (PKR)" value={paymentForm.amountPkr} onChange={(e) => setPaymentForm((p) => ({ ...p, amountPkr: e.target.value }))} />
-                    <Input placeholder="Transaction ref / slip no" value={paymentForm.transactionRef} onChange={(e) => setPaymentForm((p) => ({ ...p, transactionRef: e.target.value }))} />
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium">Upload screenshot</label>
-                    <Input type="file" accept="image/*" onChange={(e) => onScreenshotChange(e.target.files?.[0])} />
-                  </div>
-                  <Textarea placeholder="Note (optional)" value={paymentForm.note} onChange={(e) => setPaymentForm((p) => ({ ...p, note: e.target.value }))} />
-                  <Button className="w-full sm:w-auto" onClick={() => void submitPaymentProof()} disabled={submittingPayment}>
-                    {submittingPayment ? "Submitting..." : "Submit Payment Proof"}
+                  <Button className="w-full sm:w-auto" variant="secondary" onClick={() => void markAsPaid()} disabled={markingPaid}>
+                    {markingPaid ? "Updating..." : "Mark as paid"}
                   </Button>
                 </div>
               </div>

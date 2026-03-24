@@ -13,6 +13,11 @@ function skipSubscriptionCheckEnabled(): boolean {
  * Blocks API usage (except auth/health/billing) when pharmacy has no valid yearly subscription.
  */
 export async function requireActiveSubscription(req: Request, res: Response, next: NextFunction) {
+  // Billing gate is intentionally disabled to keep full app access.
+  // We keep this middleware in place so it can be re-enabled later.
+  next();
+  return;
+
   if (skipSubscriptionCheckEnabled()) {
     next();
     return;
