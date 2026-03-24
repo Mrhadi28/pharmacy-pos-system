@@ -47,6 +47,13 @@ export default defineConfig({
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
     chunkSizeWarningLimit: 1700,
+    rollupOptions: {
+      onwarn(warning, defaultHandler) {
+        // Ignore noisy third-party sourcemap mapping warnings during hosted builds.
+        if (warning.message?.includes("Error when using sourcemap for reporting an error")) return;
+        defaultHandler(warning);
+      },
+    },
   },
   server: {
     port,
