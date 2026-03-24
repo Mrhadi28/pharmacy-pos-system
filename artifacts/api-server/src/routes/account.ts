@@ -16,7 +16,7 @@ import {
   paymentSubmissionsTable,
   supportMessagesTable,
 } from "@workspace/db/schema";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { isPharmacySubscriptionActive, subscriptionAmountPkr } from "../lib/subscription";
 import nodemailer from "nodemailer";
 
@@ -89,7 +89,7 @@ router.get("/overview", async (req, res) => {
     .select()
     .from(paymentSubmissionsTable)
     .where(eq(paymentSubmissionsTable.pharmacyId, pharmacyId))
-    .orderBy(paymentSubmissionsTable.createdAt)
+    .orderBy(desc(paymentSubmissionsTable.createdAt))
     .limit(1);
 
   const paidUntil = pharmacy?.subscriptionPaidUntil ? new Date(pharmacy.subscriptionPaidUntil) : null;
@@ -181,6 +181,25 @@ router.post("/payment-submission", async (req, res) => {
   });
 
   res.status(201).json({ success: true, submission: row, mailSent });
+});
+
+router.post("/payment-submission/:id/mark-sent", async (req, res) => {
+  const { pharmacyId } = sessionUser(req);
+  if (!pharmacyId) return res.status(401).json({ error: "Not authenticated" });
+
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: "Invalid submission id" });
+  }
+
+  const [row] = await db
+    .update(paymentSubmissionsTable)
+    .set({ status: "sent" })
+    .where(and(eq(paymentSubmissionsTable.id, id), eq(paymentSubmissionsTable.pharmacyId, pharmacyId)))
+    .returning();
+
+  if (!row) return res.status(404).json({ error: "Submission not found" });
+  res.json({ success: true, submission: row });
 });
 
 router.get("/backup", async (req, res) => {

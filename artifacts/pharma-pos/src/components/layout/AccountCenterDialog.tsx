@@ -30,7 +30,13 @@ interface OverviewResponse {
     iban: string;
     note: string | null;
     whatsapp: string | null;
-    latestSubmission: any;
+    latestSubmission: {
+      id: number;
+      status: string;
+      amountPkr: number;
+      createdAt: string;
+      transactionRef?: string | null;
+    } | null;
   };
 }
 
@@ -142,6 +148,22 @@ export function AccountCenterDialog({ open, onOpenChange }: Props) {
       toast({ title: "Submit failed", description: e?.message, variant: "destructive" });
     } finally {
       setSubmittingPayment(false);
+    }
+  };
+
+  const markSubmissionSent = async () => {
+    const submissionId = overview?.payment.latestSubmission?.id;
+    if (!submissionId) return;
+    try {
+      const res = await fetch(`${API_BASE}/account/payment-submission/${submissionId}/mark-sent`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await readJsonError(res));
+      toast({ title: "Marked as sent", description: "Payment status is updated." });
+      await loadOverview();
+    } catch (e: any) {
+      toast({ title: "Could not mark sent", description: e?.message, variant: "destructive" });
     }
   };
 
@@ -265,6 +287,28 @@ export function AccountCenterDialog({ open, onOpenChange }: Props) {
 
                 <div className="rounded-xl border border-emerald-200 p-4 space-y-3 bg-gradient-to-br from-emerald-50 to-white">
                   <p className="font-semibold">Bank Payment Details</p>
+                  {overview?.payment.latestSubmission ? (
+                    <div className="rounded-lg bg-white border border-emerald-100 p-3 space-y-2 text-sm">
+                      <div className="flex items-center justify-between gap-2">
+                        <p>
+                          <span className="font-medium text-foreground">Latest status:</span>{" "}
+                          <span className={overview.payment.latestSubmission.status === "sent" ? "text-emerald-700" : "text-amber-700"}>
+                            {overview.payment.latestSubmission.status === "sent" ? "Marked as sent" : "Pending"}
+                          </span>
+                        </p>
+                        {overview.payment.latestSubmission.status !== "sent" ? (
+                          <Button type="button" size="sm" onClick={() => void markSubmissionSent()}>
+                            Mark as sent
+                          </Button>
+                        ) : null}
+                      </div>
+                      <p className="text-muted-foreground">
+                        Last submission: {Number(overview.payment.latestSubmission.amountPkr || 0).toLocaleString("en-PK")} PKR
+                        {" • "}
+                        {new Date(overview.payment.latestSubmission.createdAt).toLocaleDateString("en-PK")}
+                      </p>
+                    </div>
+                  ) : null}
                   <div className="text-sm text-muted-foreground">
                     <div className="rounded-lg bg-white border border-emerald-100 p-3 space-y-2">
                       <p><span className="font-medium text-foreground">Bank:</span> {paymentDisplay.bankName}</p>
