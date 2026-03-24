@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "wouter";
 import { formatPKR } from "@/lib/format";
+import { NEAR_LIVE_REFETCH_MS } from "@/lib/live-query";
 import { 
   Activity, 
   TrendingUp, 
@@ -88,6 +89,7 @@ function useGetDashboardStats(filter: RevenueFilter, from?: string, to?: string)
       if (!res.ok) throw new Error("Failed to load stats");
       return res.json();
     },
+    refetchInterval: NEAR_LIVE_REFETCH_MS,
   });
 }
 
@@ -127,7 +129,7 @@ function SlipModal({ sale, onClose }: { sale: RecentSale; onClose: () => void })
 
         <div id="slip-print-area" className="bg-white border border-dashed border-gray-300 rounded-xl p-4 font-mono text-xs space-y-2">
           <div className="text-center">
-            <div className="font-bold text-base">PharmaPOS</div>
+            <div className="font-bold text-base">Pharmacy POS</div>
           </div>
           <div className="border-t border-dashed border-gray-400 my-1" />
           <div className="flex justify-between"><span className="text-gray-500">Invoice</span><span className="font-bold">{sale.invoiceNumber}</span></div>

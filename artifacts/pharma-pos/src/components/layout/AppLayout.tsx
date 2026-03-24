@@ -17,12 +17,15 @@ import {
   UserCog,
   AlertTriangle,
   X,
+  Wallet,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { useAuth } from "@/hooks/use-auth";
 import { useGetDashboardStats } from "@workspace/api-client-react";
 import { formatPKR } from "@/lib/format";
+import { NEAR_LIVE_REFETCH_MS } from "@/lib/live-query";
+import { AccountCenterDialog } from "./AccountCenterDialog";
 
 interface NavItem {
   label: string;
@@ -49,8 +52,11 @@ const pageTitles: Record<string, string> = {
 export function AppLayout({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const { user, pharmacy, logout } = useAuth();
-  const { data: stats } = useGetDashboardStats();
+  const { data: stats } = useGetDashboardStats({
+    query: { refetchInterval: NEAR_LIVE_REFETCH_MS },
+  });
   const [showAlerts, setShowAlerts] = useState(false);
+  const [showAccountCenter, setShowAccountCenter] = useState(false);
 
   const alertCount = (stats?.lowStockCount || 0) + (stats?.expiringCount || 0);
   const initials = user?.fullName?.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase() || "??";
@@ -140,7 +146,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
       <div className="md:hidden flex items-center justify-between p-4 bg-card border-b border-border z-20">
         <div className="flex items-center gap-2 text-primary font-display font-bold text-xl">
           <Stethoscope className="w-6 h-6" />
-          <span className="truncate">{pharmacy?.name || "PharmaPOS"}</span>
+          <span className="truncate">{pharmacy?.name || "Pharmacy POS"}</span>
         </div>
         <div className="flex items-center gap-2">
           <button className="relative p-2 text-muted-foreground hover:text-foreground" onClick={() => setShowAlerts(!showAlerts)}>
@@ -155,11 +161,14 @@ export function AppLayout({ children }: { children: ReactNode }) {
               <div className="p-6 border-b border-border">
                 <div className="flex items-center gap-2 text-primary font-display font-bold text-xl">
                   <Stethoscope className="w-6 h-6" />
-                  <span className="truncate">{pharmacy?.name || "PharmaPOS"}</span>
+                  <span className="truncate">{pharmacy?.name || "Pharmacy POS"}</span>
                 </div>
               </div>
               <NavLinks />
-              <div className="p-4 border-t border-border mt-auto">
+              <div className="p-4 border-t border-border mt-auto space-y-2">
+                <Button variant="outline" className="w-full justify-start text-muted-foreground" onClick={() => setShowAccountCenter(true)}>
+                  <Wallet className="w-4 h-4 mr-2" /> Account Center
+                </Button>
                 <Button variant="outline" className="w-full justify-start text-muted-foreground" onClick={logout}>
                   <LogOut className="w-4 h-4 mr-2" /> Logout
                 </Button>
@@ -176,7 +185,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
             <div className="p-1.5 bg-primary/10 rounded-xl flex-shrink-0">
               <Stethoscope className="w-5 h-5 text-primary" />
             </div>
-            <span className="truncate">{pharmacy?.name || "PharmaPOS"}</span>
+            <span className="truncate">{pharmacy?.name || "Pharmacy POS"}</span>
           </div>
           {pharmacy?.city && <p className="text-xs text-muted-foreground mt-1 truncate pl-1">{pharmacy.city}</p>}
         </div>
@@ -185,7 +194,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
           <NavLinks />
         </div>
 
-        <div className="p-4 border-t border-border/50">
+        <div className="p-4 border-t border-border/50 space-y-3">
           <div className="flex items-center gap-3 mb-3 px-2">
             <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm flex-shrink-0">
               {initials}
@@ -195,6 +204,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
               <p className="text-xs text-muted-foreground capitalize">{user?.role}</p>
             </div>
           </div>
+          <Button variant="outline" className="w-full justify-start text-muted-foreground h-9" onClick={() => setShowAccountCenter(true)}>
+            <Wallet className="w-4 h-4 mr-2" />Account Center
+          </Button>
           <Button variant="outline" className="w-full justify-start text-muted-foreground h-9" onClick={logout}>
             <LogOut className="w-4 h-4 mr-2" />Logout
           </Button>
@@ -205,7 +217,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
       <main className="flex-1 md:ml-64 flex flex-col min-h-screen">
         <header className="hidden md:flex h-16 items-center justify-between px-8 bg-background/80 backdrop-blur-md sticky top-0 z-10 border-b border-border/50">
           <h1 className="font-display text-xl font-bold text-foreground tracking-tight">
-            {navItems.find(i => i.href === location)?.label || pageTitles[location] || "PharmaPOS"}
+            {navItems.find(i => i.href === location)?.label || pageTitles[location] || "Pharmacy POS"}
           </h1>
           <div className="flex items-center gap-3">
             <div className="relative">
@@ -244,6 +256,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
           </AnimatePresence>
         </div>
       </main>
+      <AccountCenterDialog open={showAccountCenter} onOpenChange={setShowAccountCenter} />
     </div>
   );
 }

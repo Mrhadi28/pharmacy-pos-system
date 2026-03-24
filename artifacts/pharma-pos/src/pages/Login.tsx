@@ -3,9 +3,18 @@ import { useAuth } from "@/hooks/use-auth";
 import { Stethoscope, Eye, EyeOff, LogIn, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { toast } from "@/hooks/use-toast";
+import { getApiBase, readJsonError } from "@/lib/api-base";
 
-const API_BASE = import.meta.env.BASE_URL.replace(/\/$/, "") + "/api";
+const API_BASE = getApiBase();
 
 export default function Login() {
   const { login, refresh } = useAuth();
@@ -14,6 +23,14 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
 
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotForm, setForgotForm] = useState({
+    username: "",
+    phone: "",
+    newPassword: "",
+    confirmPassword: "",
+  });
+  const [forgotLoading, setForgotLoading] = useState(false);
   const [regForm, setRegForm] = useState({
     pharmacyName: "", ownerName: "", username: "", password: "",
     phone: "", city: "", address: "",
@@ -47,15 +64,50 @@ export default function Login() {
         body: JSON.stringify(regForm),
       });
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Registration failed");
+        throw new Error(await readJsonError(res));
       }
       await refresh();
-      toast({ title: "Pharmacy registered!", description: `Welcome to PharmaPOS, ${regForm.pharmacyName}!` });
+      toast({
+        title: "Pharmacy registered!",
+        description: "Salana subscription fee ada karke activate karwayen — agli screen par tafseel hai.",
+      });
     } catch (err: any) {
       toast({ title: "Registration failed", description: err.message, variant: "destructive" });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (forgotForm.newPassword !== forgotForm.confirmPassword) {
+      toast({ title: "Passwords do not match", variant: "destructive" });
+      return;
+    }
+    setForgotLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/auth/forgot-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          username: forgotForm.username.trim(),
+          phone: forgotForm.phone.trim(),
+          newPassword: forgotForm.newPassword,
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(await readJsonError(res));
+      }
+      const data = (await res.json()) as { message?: string };
+      toast({ title: "Password updated", description: data.message || "You can log in with your new password." });
+      setForgotOpen(false);
+      setForgotForm({ username: "", phone: "", newPassword: "", confirmPassword: "" });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Something went wrong";
+      toast({ title: "Reset failed", description: message, variant: "destructive" });
+    } finally {
+      setForgotLoading(false);
     }
   };
 
@@ -67,8 +119,14 @@ export default function Login() {
           <div className="inline-flex items-center justify-center w-20 h-20 bg-primary/10 rounded-2xl mb-4">
             <Stethoscope className="w-10 h-10 text-primary" />
           </div>
-          <h1 className="font-display font-extrabold text-3xl text-foreground tracking-tight">PharmaPOS</h1>
-          <p className="text-muted-foreground mt-1">Pakistan's Pharmacy Management System</p>
+          <h1 className="font-display font-extrabold text-3xl text-foreground tracking-tight">Pharmacy POS System</h1>
+          <p className="text-muted-foreground mt-2 text-sm">Developed by DevArion Solution</p>
+          <a
+            href="mailto:contact.devarion@gmail.com"
+            className="text-sm text-primary hover:underline mt-1 inline-block"
+          >
+            contact.devarion@gmail.com
+          </a>
         </div>
 
         <div className="bg-card border border-border rounded-2xl shadow-xl shadow-black/5 p-8">
@@ -113,15 +171,22 @@ export default function Login() {
                     {showPass ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                   </button>
                 </div>
+                <div className="flex justify-end mt-2">
+                  <button
+                    type="button"
+                    className="text-sm font-medium text-primary hover:underline"
+                    onClick={() => {
+                      setForgotForm((f) => ({ ...f, username: loginForm.username }));
+                      setForgotOpen(true);
+                    }}
+                  >
+                    Forgot password?
+                  </button>
+                </div>
               </div>
               <Button className="w-full h-12 text-base font-bold mt-2" disabled={loading}>
                 {loading ? "Logging in..." : "Login"}
               </Button>
-              <div className="bg-muted/50 rounded-xl p-4 text-xs text-muted-foreground text-center mt-4">
-                <p className="font-semibold mb-1">Demo Credentials</p>
-                <p>Username: <span className="font-mono font-bold text-foreground">admin</span></p>
-                <p>Password: <span className="font-mono font-bold text-foreground">admin123</span></p>
-              </div>
             </form>
           ) : (
             <form onSubmit={handleRegister} className="space-y-4">
@@ -158,9 +223,84 @@ export default function Login() {
           )}
         </div>
 
-        <p className="text-center text-xs text-muted-foreground mt-6">
-          PharmaPOS Pakistan — Professional Pharmacy Management System
-        </p>
+        <Dialog open={forgotOpen} onOpenChange={setForgotOpen}>
+          <DialogContent className="sm:max-w-md">
+            <form onSubmit={handleForgotPassword}>
+              <DialogHeader>
+                <DialogTitle>Reset password</DialogTitle>
+                <DialogDescription>
+                  Enter your username and the phone number registered on your account, then choose a new password.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-4 py-2">
+                <div>
+                  <label className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-1.5 block">
+                    Username
+                  </label>
+                  <Input
+                    placeholder="Your username"
+                    value={forgotForm.username}
+                    onChange={(e) => setForgotForm((f) => ({ ...f, username: e.target.value }))}
+                    required
+                    className="h-11"
+                    autoComplete="username"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-1.5 block">
+                    Registered phone
+                  </label>
+                  <Input
+                    placeholder="Same number as pharmacy registration"
+                    value={forgotForm.phone}
+                    onChange={(e) => setForgotForm((f) => ({ ...f, phone: e.target.value }))}
+                    required
+                    className="h-11"
+                    autoComplete="tel"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-1.5 block">
+                    New password
+                  </label>
+                  <Input
+                    type="password"
+                    placeholder="At least 6 characters"
+                    value={forgotForm.newPassword}
+                    onChange={(e) => setForgotForm((f) => ({ ...f, newPassword: e.target.value }))}
+                    required
+                    minLength={6}
+                    className="h-11"
+                    autoComplete="new-password"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-1.5 block">
+                    Confirm new password
+                  </label>
+                  <Input
+                    type="password"
+                    placeholder="Repeat new password"
+                    value={forgotForm.confirmPassword}
+                    onChange={(e) => setForgotForm((f) => ({ ...f, confirmPassword: e.target.value }))}
+                    required
+                    minLength={6}
+                    className="h-11"
+                    autoComplete="new-password"
+                  />
+                </div>
+              </div>
+              <DialogFooter className="gap-2 sm:gap-0">
+                <Button type="button" variant="outline" onClick={() => setForgotOpen(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={forgotLoading}>
+                  {forgotLoading ? "Saving..." : "Update password"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );

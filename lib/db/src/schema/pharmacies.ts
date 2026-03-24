@@ -12,6 +12,8 @@ export const pharmaciesTable = pgTable("pharmacies", {
   email: text("email"),
   city: text("city"),
   isActive: boolean("is_active").notNull().default(true),
+  /** Null or past date = subscription not paid; new pharmacies start unpaid. */
+  subscriptionPaidUntil: timestamp("subscription_paid_until"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

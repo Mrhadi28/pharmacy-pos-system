@@ -17,26 +17,32 @@ import Khata from "@/pages/Khata";
 import Users from "@/pages/Users";
 import Transactions from "@/pages/Transactions";
 import Login from "@/pages/Login";
+import SubscriptionPaywall from "@/pages/SubscriptionPaywall";
+import { hasActiveSubscription } from "@/lib/pharmacy-subscription";
+import { RealtimeSync } from "@/hooks/use-realtime-sync";
+import { SupabaseRealtimeSync } from "@/hooks/use-supabase-realtime-sync";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 1,
-      refetchOnWindowFocus: false,
+      // Tab wapas aane par fresh data (dukan mein “live” feel, low effort vs WebSockets)
+      refetchOnWindowFocus: true,
+      staleTime: 8_000,
     },
   },
 });
 
 function AppRoutes() {
-  const { user, isLoading } = useAuth();
+  const { user, pharmacy, isLoading } = useAuth();
 
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="text-center">
           <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-muted-foreground">Loading PharmaPOS...</p>
+          <p className="text-muted-foreground">Loading Pharmacy POS System...</p>
         </div>
       </div>
     );
@@ -44,6 +50,10 @@ function AppRoutes() {
 
   if (!user) {
     return <Login />;
+  }
+
+  if (!hasActiveSubscription(pharmacy)) {
+    return <SubscriptionPaywall />;
   }
 
   return (
@@ -70,6 +80,8 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <AuthProvider>
+          <RealtimeSync />
+          <SupabaseRealtimeSync />
           <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
             <AppRoutes />
           </WouterRouter>

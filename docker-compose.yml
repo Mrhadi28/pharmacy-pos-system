@@ -1,0 +1,22 @@
+# Local PostgreSQL — same DB family you use in production (recommended).
+# Start: docker compose up -d
+# Connection string: see .env.example
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: pharma
+      POSTGRES_PASSWORD: pharma_dev
+      POSTGRES_DB: pharma_wise
+    volumes:
+      - pharma_wise_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pharma -d pharma_wise"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pharma_wise_pg:

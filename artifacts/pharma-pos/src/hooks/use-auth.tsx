@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import { getApiBase, readJsonError } from "@/lib/api-base";
 
-const API_BASE = import.meta.env.BASE_URL.replace(/\/$/, "") + "/api";
+const API_BASE = getApiBase();
 
 export interface AuthUser {
   id: number;
@@ -23,6 +24,8 @@ export interface AuthPharmacy {
   email?: string;
   city?: string;
   isActive: boolean;
+  /** ISO date; null/missing or past = subscription not active */
+  subscriptionPaidUntil?: string | null;
   createdAt: string;
 }
 
@@ -68,13 +71,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username: username.trim(), password }),
     });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || "Login failed");
+      throw new Error(await readJsonError(res));
     }
-    const data = await res.json();
+    const data = (await res.json()) as { user: AuthUser; pharmacy: AuthPharmacy };
     setUser(data.user);
     setPharmacy(data.pharmacy);
   };

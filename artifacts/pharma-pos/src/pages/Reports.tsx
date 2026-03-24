@@ -59,7 +59,7 @@ function TransactionSlipModal({ sale, onClose }: { sale: Sale; onClose: () => vo
 
         <div id="tx-slip-print-area" className="bg-white border border-dashed border-gray-300 rounded-xl p-4 font-mono text-xs space-y-2">
           <div className="text-center">
-            <div className="font-bold text-base">PharmaPOS</div>
+            <div className="font-bold text-base">Pharmacy POS</div>
           </div>
           <div className="border-t border-dashed border-gray-400 my-1" />
           <div className="flex justify-between"><span className="text-gray-500">Invoice</span><span className="font-bold">{sale.invoiceNumber}</span></div>

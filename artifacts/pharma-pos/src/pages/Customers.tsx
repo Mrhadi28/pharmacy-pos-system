@@ -24,6 +24,7 @@ export default function Customers() {
   const [search, setSearch] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<Customer | null>(null);
+  const [isSubmittingForm, setIsSubmittingForm] = useState(false);
   
   const queryClient = useQueryClient();
   const { data: items = [], isLoading } = useGetCustomers();
@@ -43,16 +44,23 @@ export default function Customers() {
     setIsDialogOpen(true); 
   };
 
-  const onSubmit = (values: z.infer<typeof formSchema>) => {
-    const action = editingItem 
-      ? updateMut.mutateAsync({ id: editingItem.id, data: values })
-      : createMut.mutateAsync({ data: values });
-
-    action.then(() => {
+  const onSubmit = async (values: z.infer<typeof formSchema>) => {
+    if (isSubmittingForm) return;
+    setIsSubmittingForm(true);
+    try {
+      if (editingItem) {
+        await updateMut.mutateAsync({ id: editingItem.id, data: values });
+      } else {
+        await createMut.mutateAsync({ data: values });
+      }
       toast({ title: `Customer ${editingItem ? "updated" : "added"} successfully` });
       setIsDialogOpen(false);
       queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
-    }).catch(e => toast({ title: "Error", description: e.message, variant: "destructive" }));
+    } catch (e: any) {
+      toast({ title: "Error", description: e?.message ?? "Request failed", variant: "destructive" });
+    } finally {
+      setIsSubmittingForm(false);
+    }
   };
 
   const handleDelete = (id: number) => {
@@ -126,7 +134,11 @@ export default function Customers() {
               <FormField control={form.control} name="phone" render={({field}) => <FormItem><FormLabel>Phone Number</FormLabel><FormControl><Input {...field}/></FormControl><FormMessage/></FormItem>} />
               <FormField control={form.control} name="email" render={({field}) => <FormItem><FormLabel>Email (Optional)</FormLabel><FormControl><Input {...field}/></FormControl><FormMessage/></FormItem>} />
               <FormField control={form.control} name="address" render={({field}) => <FormItem><FormLabel>Address</FormLabel><FormControl><Input {...field}/></FormControl><FormMessage/></FormItem>} />
-              <DialogFooter><Button type="submit">Save Customer</Button></DialogFooter>
+              <DialogFooter>
+                <Button type="submit" disabled={isSubmittingForm || createMut.isPending || updateMut.isPending}>
+                  {isSubmittingForm || createMut.isPending || updateMut.isPending ? "Saving..." : "Save Customer"}
+                </Button>
+              </DialogFooter>
             </form>
           </Form>
         </DialogContent>

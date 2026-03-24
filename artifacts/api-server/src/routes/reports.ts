@@ -22,11 +22,18 @@ function getDateRange(period: string): { startDate: Date; endDate: Date } {
 }
 
 router.get("/sales-summary", async (req, res) => {
+  const pharmacyId = (req.session as { pharmacyId?: number }).pharmacyId;
+  if (!pharmacyId) return res.status(401).json({ error: "Not authenticated" });
   const period = (req.query.period as string) || "month";
   const { startDate, endDate } = getDateRange(period);
 
   const sales = await db.select().from(salesTable).where(
-    and(gte(salesTable.createdAt, startDate), lte(salesTable.createdAt, endDate), eq(salesTable.status, "completed"))
+    and(
+      eq(salesTable.pharmacyId, pharmacyId),
+      gte(salesTable.createdAt, startDate),
+      lte(salesTable.createdAt, endDate),
+      eq(salesTable.status, "completed"),
+    )
   );
 
   const totalRevenue = sales.reduce((sum, s) => sum + parseFloat(s.paidAmount as string), 0);
@@ -50,11 +57,18 @@ router.get("/sales-summary", async (req, res) => {
 });
 
 router.get("/top-medicines", async (req, res) => {
+  const pharmacyId = (req.session as { pharmacyId?: number }).pharmacyId;
+  if (!pharmacyId) return res.status(401).json({ error: "Not authenticated" });
   const period = (req.query.period as string) || "month";
   const { startDate, endDate } = getDateRange(period);
 
   const salesInRange = await db.select().from(salesTable).where(
-    and(gte(salesTable.createdAt, startDate), lte(salesTable.createdAt, endDate), eq(salesTable.status, "completed"))
+    and(
+      eq(salesTable.pharmacyId, pharmacyId),
+      gte(salesTable.createdAt, startDate),
+      lte(salesTable.createdAt, endDate),
+      eq(salesTable.status, "completed"),
+    )
   );
 
   if (salesInRange.length === 0) { res.json([]); return; }
@@ -79,6 +93,8 @@ router.get("/top-medicines", async (req, res) => {
 });
 
 router.get("/expiring-medicines", async (req, res) => {
+  const pharmacyId = (req.session as { pharmacyId?: number }).pharmacyId;
+  if (!pharmacyId) return res.status(401).json({ error: "Not authenticated" });
   const days = parseInt((req.query.days as string) || "30");
   const today = new Date();
   const futureDate = new Date();
@@ -89,6 +105,7 @@ router.get("/expiring-medicines", async (req, res) => {
   const medicines = await db.select().from(medicinesTable).where(
     and(
       sql`${medicinesTable.expiryDate} IS NOT NULL`,
+      eq(medicinesTable.pharmacyId, pharmacyId),
       sql`${medicinesTable.expiryDate} <= ${futureDateStr}`,
       sql`${medicinesTable.expiryDate} >= ${todayStr}`
     )
@@ -98,7 +115,9 @@ router.get("/expiring-medicines", async (req, res) => {
 });
 
 router.get("/alerts", async (_req, res) => {
-  const allMedicines = await db.select().from(medicinesTable).where(eq(medicinesTable.isActive, true));
+  const pharmacyId = ((_req as any).session as { pharmacyId?: number } | undefined)?.pharmacyId;
+  if (!pharmacyId) return res.status(401).json({ error: "Not authenticated" });
+  const allMedicines = await db.select().from(medicinesTable).where(and(eq(medicinesTable.isActive, true), eq(medicinesTable.pharmacyId, pharmacyId)));
 
   const lowStock = allMedicines.filter(m => m.stockQuantity <= m.minStockLevel);
 
@@ -113,7 +132,10 @@ router.get("/alerts", async (_req, res) => {
 
   // Credit alerts - customers with outstanding balance > 0
   const creditSales = await db.select().from(salesTable).where(
-    or(eq(salesTable.paymentStatus, "credit"), eq(salesTable.paymentStatus, "partial"))!
+    and(
+      eq(salesTable.pharmacyId, pharmacyId),
+      or(eq(salesTable.paymentStatus, "credit"), eq(salesTable.paymentStatus, "partial"))!,
+    )
   );
 
   const customerCreditMap = new Map<number, number>();
@@ -129,7 +151,7 @@ router.get("/alerts", async (_req, res) => {
     Array.from(customerCreditMap.entries())
       .filter(([, outstanding]) => outstanding > 0)
       .map(async ([customerId, outstanding]) => {
-        const [cust] = await db.select().from(customersTable).where(eq(customersTable.id, customerId));
+        const [cust] = await db.select().from(customersTable).where(and(eq(customersTable.id, customerId), eq(customersTable.pharmacyId, pharmacyId)));
         return { customerId, customerName: cust?.name ?? "Unknown", outstanding };
       })
   );

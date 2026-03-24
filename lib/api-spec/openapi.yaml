@@ -72,6 +72,29 @@ paths:
               schema:
                 $ref: "#/components/schemas/AuthResponse"
 
+  /auth/forgot-password:
+    post:
+      operationId: forgotPassword
+      tags: [auth]
+      summary: Reset password using registered phone verification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForgotPasswordInput"
+      responses:
+        "200":
+          description: Password updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Validation or phone mismatch
+        "404":
+          description: Username not found
+
   /auth/logout:
     post:
       operationId: logout
@@ -817,6 +840,18 @@ components:
         password:
           type: string
       required: [username, password]
+
+    ForgotPasswordInput:
+      type: object
+      properties:
+        username:
+          type: string
+        phone:
+          type: string
+        newPassword:
+          type: string
+          minLength: 6
+      required: [username, phone, newPassword]
 
     AuthResponse:
       type: object

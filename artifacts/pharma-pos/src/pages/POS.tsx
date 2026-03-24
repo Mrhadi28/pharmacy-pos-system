@@ -25,6 +25,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { useQueryClient } from "@tanstack/react-query";
+import { NEAR_LIVE_REFETCH_MS } from "@/lib/live-query";
 
 interface CompletedSale extends Sale {
   pharmacyName?: string;
@@ -32,6 +33,11 @@ interface CompletedSale extends Sale {
   pharmacyAddress?: string;
   cashierName?: string;
   customerPhone?: string;
+}
+
+function formatReceiptAmount(value: number | string | null | undefined): string {
+  const amount = Number(value ?? 0);
+  return `Rs ${amount.toLocaleString("en-PK")}`;
 }
 
 export default function POS() {
@@ -47,8 +53,12 @@ export default function POS() {
   const receiptRef = useRef<HTMLDivElement>(null);
 
   const { pharmacy, user } = useAuth();
-  const { data: medicines = [], isLoading } = useGetMedicines();
-  const { data: customers = [], refetch: refetchCustomers } = useGetCustomers();
+  const { data: medicines = [], isLoading } = useGetMedicines(undefined, {
+    query: { refetchInterval: NEAR_LIVE_REFETCH_MS },
+  });
+  const { data: customers = [], refetch: refetchCustomers } = useGetCustomers(undefined, {
+    query: { refetchInterval: NEAR_LIVE_REFETCH_MS },
+  });
   const { mutate: createSale, isPending: isCheckingOut } = useCreateSale();
   const { mutate: createCustomer } = useCreateCustomer();
   const { mutate: updateCustomer } = useUpdateCustomer();
@@ -194,17 +204,29 @@ export default function POS() {
         <title>Receipt - ${completedSale?.invoiceNumber}</title>
         <style>
           * { margin: 0; padding: 0; box-sizing: border-box; }
-          body { font-family: 'Courier New', monospace; font-size: 12px; width: 80mm; padding: 4mm; }
+          body { font-family: 'Courier New', monospace; font-size: 12px; width: 80mm; padding: 4mm; color: #111827; }
           .center { text-align: center; }
-          .right { text-align: right; }
           .bold { font-weight: bold; }
           .title { font-size: 16px; font-weight: bold; }
           .subtitle { font-size: 11px; color: #555; }
           .divider { border-top: 1px dashed #333; margin: 6px 0; }
-          .item-row { display: flex; justify-content: space-between; padding: 2px 0; }
+          .meta-row { display: flex; justify-content: space-between; margin: 2px 0; gap: 8px; }
+          .meta-row span:last-child { text-align: right; font-weight: 700; }
+          .items-head, .item-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 34px 70px 74px;
+            gap: 4px;
+            align-items: center;
+          }
+          .items-head { color: #6b7280; font-weight: 700; margin-bottom: 2px; }
+          .item-row { padding: 2px 0; }
+          .item-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          .qty-col { text-align: center; }
+          .num-col { text-align: right; font-variant-numeric: tabular-nums; }
+          .summary-row { display: flex; justify-content: space-between; margin: 2px 0; font-variant-numeric: tabular-nums; }
+          .summary-row span:last-child { text-align: right; }
           .total-row { display: flex; justify-content: space-between; font-weight: bold; font-size: 14px; padding: 4px 0; }
           .footer { text-align: center; font-size: 10px; color: #555; margin-top: 8px; }
-          .badge { display: inline-block; background: #fee2e2; color: #991b1b; padding: 2px 6px; border-radius: 4px; font-weight: bold; }
           @media print { body { padding: 0; } }
         </style>
       </head>
@@ -493,57 +515,57 @@ export default function POS() {
           </DialogHeader>
 
           {/* Printable Receipt */}
-          <div ref={receiptRef} className="bg-white border border-dashed border-gray-300 rounded-xl p-4 font-mono text-xs space-y-2">
+          <div ref={receiptRef} className="bg-white border border-dashed border-gray-300 rounded-xl p-4 font-mono text-xs text-gray-800 space-y-2">
             <div className="center text-center">
-              <div className="title bold text-base font-bold">{completedSale?.pharmacyName || "PharmaPOS"}</div>
+              <div className="title bold text-base font-bold">{completedSale?.pharmacyName || "Pharmacy POS"}</div>
               {completedSale?.pharmacyAddress && <div className="subtitle text-gray-500 text-xs">{completedSale.pharmacyAddress}</div>}
               {completedSale?.pharmacyPhone && <div className="subtitle text-gray-500 text-xs">Tel: {completedSale.pharmacyPhone}</div>}
             </div>
             <div className="divider border-t border-dashed border-gray-400 my-1" />
-            <div className="flex justify-between"><span className="text-gray-500">Invoice</span><span className="font-bold">{completedSale?.invoiceNumber}</span></div>
-            <div className="flex justify-between"><span className="text-gray-500">Date</span><span>{new Date(completedSale?.createdAt || Date.now()).toLocaleString("en-PK")}</span></div>
+            <div className="meta-row"><span className="text-gray-500">Invoice</span><span>{completedSale?.invoiceNumber}</span></div>
+            <div className="meta-row"><span className="text-gray-500">Date</span><span>{new Date(completedSale?.createdAt || Date.now()).toLocaleString("en-PK")}</span></div>
             {completedSale?.customerName && (
-              <div className="flex justify-between"><span className="text-gray-500">Customer</span><span className="font-bold">{completedSale.customerName}</span></div>
+              <div className="meta-row"><span className="text-gray-500">Customer</span><span>{completedSale.customerName}</span></div>
             )}
             {completedSale?.customerPhone && (
-              <div className="flex justify-between"><span className="text-gray-500">Phone</span><span>{completedSale.customerPhone}</span></div>
+              <div className="meta-row"><span className="text-gray-500">Phone</span><span>{completedSale.customerPhone}</span></div>
             )}
-            {completedSale?.cashierName && <div className="flex justify-between"><span className="text-gray-500">Cashier</span><span>{completedSale.cashierName}</span></div>}
+            {completedSale?.cashierName && <div className="meta-row"><span className="text-gray-500">Cashier</span><span>{completedSale.cashierName}</span></div>}
             <div className="divider border-t border-dashed border-gray-400 my-1" />
-            <div className="flex justify-between font-bold text-xs text-gray-500 mb-1">
-              <span className="flex-1">Item</span><span className="w-8 text-center">Qty</span><span className="w-14 text-right">Price</span><span className="w-16 text-right">Total</span>
+            <div className="items-head">
+              <span>Item</span><span className="qty-col">Qty</span><span className="num-col">Price</span><span className="num-col">Total</span>
             </div>
             {(completedSale?.items || []).map((item: SaleItem, i: number) => (
               <div key={i} className="item-row">
-                <span className="flex-1 truncate">{item.medicineName}</span>
-                <span className="w-8 text-center">{item.quantity}</span>
-                <span className="w-14 text-right">{formatPKR(item.unitPrice)}</span>
-                <span className="w-16 text-right font-semibold">{formatPKR(item.total)}</span>
+                <span className="item-name">{item.medicineName}</span>
+                <span className="qty-col">{item.quantity}</span>
+                <span className="num-col">{formatReceiptAmount(item.unitPrice)}</span>
+                <span className="num-col font-semibold">{formatReceiptAmount(item.total)}</span>
               </div>
             ))}
             <div className="divider border-t border-dashed border-gray-400 my-1" />
             {(completedSale?.discount ?? 0) > 0 && (
-              <div className="flex justify-between text-gray-600"><span>Discount</span><span>-{formatPKR(completedSale!.discount)}</span></div>
+              <div className="summary-row text-gray-600"><span>Discount</span><span>-{formatReceiptAmount(completedSale!.discount)}</span></div>
             )}
             <div className="total-row flex justify-between font-bold text-sm">
-              <span>Total</span><span>{formatPKR(completedSale?.totalAmount ?? 0)}</span>
+              <span>Total</span><span>{formatReceiptAmount(completedSale?.totalAmount ?? 0)}</span>
             </div>
             {completedSale?.paymentStatus !== "credit" && (
               <>
-                <div className="flex justify-between text-gray-600"><span>Paid ({completedSale?.paymentMethod?.toUpperCase()})</span><span>{formatPKR(completedSale?.paidAmount ?? 0)}</span></div>
+                <div className="summary-row text-gray-600"><span>Paid ({completedSale?.paymentMethod?.toUpperCase()})</span><span>{formatReceiptAmount(completedSale?.paidAmount ?? 0)}</span></div>
                 {(completedSale?.changeAmount ?? 0) > 0 && (
-                  <div className="flex justify-between text-gray-600"><span>Change</span><span>{formatPKR(completedSale!.changeAmount)}</span></div>
+                  <div className="summary-row text-gray-600"><span>Change</span><span>{formatReceiptAmount(completedSale!.changeAmount)}</span></div>
                 )}
               </>
             )}
             {completedSale?.paymentStatus === "credit" && (
-              <div className="flex justify-between font-bold text-red-600 text-sm">
-                <span>KHATA (Credit)</span><span>{formatPKR(completedSale?.creditAmount || completedSale?.totalAmount || 0)}</span>
+              <div className="summary-row font-bold text-red-600 text-sm">
+                <span>KHATA (Credit)</span><span>{formatReceiptAmount(completedSale?.creditAmount || completedSale?.totalAmount || 0)}</span>
               </div>
             )}
             {completedSale?.paymentStatus === "partial" && (
-              <div className="flex justify-between font-bold text-orange-600 text-sm">
-                <span>Outstanding</span><span>{formatPKR(completedSale?.creditAmount ?? 0)}</span>
+              <div className="summary-row font-bold text-orange-600 text-sm">
+                <span>Outstanding</span><span>{formatReceiptAmount(completedSale?.creditAmount ?? 0)}</span>
               </div>
             )}
             <div className="divider border-t border-dashed border-gray-400 my-1" />

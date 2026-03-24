@@ -2,9 +2,11 @@ import { pgTable, text, serial, timestamp, integer, numeric } from "drizzle-orm/
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { customersTable } from "./customers";
+import { pharmaciesTable } from "./pharmacies";
 
 export const salesTable = pgTable("sales", {
   id: serial("id").primaryKey(),
+  pharmacyId: integer("pharmacy_id").references(() => pharmaciesTable.id),
   invoiceNumber: text("invoice_number").notNull().unique(),
   customerId: integer("customer_id").references(() => customersTable.id),
   subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull(),

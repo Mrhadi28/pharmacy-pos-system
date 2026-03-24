@@ -3,9 +3,11 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { categoriesTable } from "./categories";
 import { suppliersTable } from "./suppliers";
+import { pharmaciesTable } from "./pharmacies";
 
 export const medicinesTable = pgTable("medicines", {
   id: serial("id").primaryKey(),
+  pharmacyId: integer("pharmacy_id").references(() => pharmaciesTable.id),
   name: text("name").notNull(),
   genericName: text("generic_name"),
   categoryId: integer("category_id").references(() => categoriesTable.id),

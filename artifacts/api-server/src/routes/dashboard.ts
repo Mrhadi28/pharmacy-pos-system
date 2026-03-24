@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { salesTable, saleItemsTable, medicinesTable, customersTable } from "@workspace/db/schema";
-import { eq, gte, lte, and, or } from "drizzle-orm";
+import { eq, gte, lte, and, or, inArray } from "drizzle-orm";
 
 const router = Router();
 
@@ -46,6 +46,11 @@ function getFilterDates(filter?: string, from?: string, to?: string): { startDat
 }
 
 router.get("/stats", async (req, res) => {
+  const pharmacyId = (req.session as { pharmacyId?: number }).pharmacyId;
+  if (!pharmacyId) {
+    res.status(401).json({ error: "Not authenticated" });
+    return;
+  }
   const now = new Date();
   const filter = req.query.filter as string | undefined;
   const from = req.query.from as string | undefined;
@@ -54,14 +59,22 @@ router.get("/stats", async (req, res) => {
   const { startDate, endDate } = getFilterDates(filter, from, to);
 
   const filteredSales = await db.select().from(salesTable).where(
-    and(gte(salesTable.createdAt, startDate), lte(salesTable.createdAt, endDate), eq(salesTable.status, "completed"))
+    and(
+      eq(salesTable.pharmacyId, pharmacyId),
+      gte(salesTable.createdAt, startDate),
+      lte(salesTable.createdAt, endDate),
+      eq(salesTable.status, "completed"),
+    )
   );
 
   const filteredRevenue = filteredSales.reduce((sum, s) => sum + parseFloat(s.paidAmount as string), 0);
   const filteredTransactions = filteredSales.length;
   const avgOrderValue = filteredTransactions > 0 ? filteredRevenue / filteredTransactions : 0;
 
-  const allMedicines = await db.select().from(medicinesTable);
+  const allMedicines = await db
+    .select()
+    .from(medicinesTable)
+    .where(eq(medicinesTable.pharmacyId, pharmacyId));
   const totalMedicines = allMedicines.length;
   const lowStockCount = allMedicines.filter(m => m.stockQuantity <= m.minStockLevel).length;
 
@@ -71,27 +84,43 @@ router.get("/stats", async (req, res) => {
   const expiringCount = allMedicines.filter(m => m.expiryDate && m.expiryDate >= todayStr && m.expiryDate <= futureDateStr).length;
 
   const creditSales = await db.select().from(salesTable).where(
-    or(eq(salesTable.paymentStatus, "credit"), eq(salesTable.paymentStatus, "partial"))!
+    and(
+      eq(salesTable.pharmacyId, pharmacyId),
+      or(eq(salesTable.paymentStatus, "credit"), eq(salesTable.paymentStatus, "partial"))!,
+    )
   );
   const totalCreditOutstanding = creditSales.reduce((sum, s) => sum + parseFloat(s.creditAmount as string || "0"), 0);
 
-  // Fetch recent sales with full item details and customer names for slip display
+  // Fetch recent sales with batched item/customer lookups (avoids N+1 queries).
   const recentSalesRaw = await db.select().from(salesTable)
-    .where(and(gte(salesTable.createdAt, startDate), lte(salesTable.createdAt, endDate)))
+    .where(and(eq(salesTable.pharmacyId, pharmacyId), gte(salesTable.createdAt, startDate), lte(salesTable.createdAt, endDate)))
     .orderBy(salesTable.createdAt)
     .limit(20);
+  const recentSaleIds = recentSalesRaw.map((sale) => sale.id);
+  const recentItems = recentSaleIds.length
+    ? await db.select().from(saleItemsTable).where(inArray(saleItemsTable.saleId, recentSaleIds))
+    : [];
+  const itemsBySaleId = new Map<number, typeof recentItems>();
+  for (const item of recentItems) {
+    const list = itemsBySaleId.get(item.saleId) ?? [];
+    list.push(item);
+    itemsBySaleId.set(item.saleId, list);
+  }
 
-  const recentSales = await Promise.all(
-    recentSalesRaw.reverse().map(async (sale) => {
-      const items = await db.select().from(saleItemsTable).where(eq(saleItemsTable.saleId, sale.id));
-      let customerName = null;
-      if (sale.customerId) {
-        const [cust] = await db.select().from(customersTable).where(eq(customersTable.id, sale.customerId));
-        customerName = cust?.name ?? null;
-      }
-      return { ...sale, items, customerName };
-    })
-  );
+  const customerIds = Array.from(new Set(recentSalesRaw.map((sale) => sale.customerId).filter((id): id is number => Boolean(id))));
+  const customers = customerIds.length
+    ? await db
+        .select({ id: customersTable.id, name: customersTable.name })
+        .from(customersTable)
+        .where(inArray(customersTable.id, customerIds))
+    : [];
+  const customerNameById = new Map(customers.map((c) => [c.id, c.name]));
+
+  const recentSales = recentSalesRaw.reverse().map((sale) => ({
+    ...sale,
+    items: itemsBySaleId.get(sale.id) ?? [],
+    customerName: sale.customerId ? (customerNameById.get(sale.customerId) ?? null) : null,
+  }));
 
   res.json({
     todaySales: filteredRevenue,

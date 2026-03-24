@@ -8,8 +8,11 @@ const router = Router();
 // Get all credit/khata sales
 router.get("/", async (req, res) => {
   const { customerId } = req.query;
+  const pharmacyId = (req.session as { pharmacyId?: number }).pharmacyId;
+  if (!pharmacyId) return res.status(401).json({ error: "Not authenticated" });
 
   const conditions = [
+    eq(salesTable.pharmacyId, pharmacyId),
     or(eq(salesTable.paymentStatus, "credit"), eq(salesTable.paymentStatus, "partial"))!
   ];
 
@@ -24,7 +27,10 @@ router.get("/", async (req, res) => {
       const items = await db.select().from(saleItemsTable).where(eq(saleItemsTable.saleId, sale.id));
       let customerName = null;
       if (sale.customerId) {
-        const [cust] = await db.select().from(customersTable).where(eq(customersTable.id, sale.customerId));
+        const [cust] = await db
+          .select()
+          .from(customersTable)
+          .where(and(eq(customersTable.id, sale.customerId), eq(customersTable.pharmacyId, pharmacyId)));
         customerName = cust?.name ?? null;
       }
       return { ...sale, items, customerName };
@@ -35,15 +41,26 @@ router.get("/", async (req, res) => {
 });
 
 // Get all manual credit entries
-router.get("/manual", async (_req, res) => {
-  const entries = await db.select().from(manualCreditEntriesTable).orderBy(manualCreditEntriesTable.createdAt);
+router.get("/manual", async (req, res) => {
+  const pharmacyId = (req.session as { pharmacyId?: number }).pharmacyId;
+  if (!pharmacyId) return res.status(401).json({ error: "Not authenticated" });
+  const entries = await db
+    .select()
+    .from(manualCreditEntriesTable)
+    .where(eq(manualCreditEntriesTable.pharmacyId, pharmacyId))
+    .orderBy(manualCreditEntriesTable.createdAt);
   res.json(entries.reverse());
 });
 
 // Get single manual credit entry with payment history
 router.get("/manual/:id", async (req, res) => {
   const id = parseInt(req.params.id);
-  const [entry] = await db.select().from(manualCreditEntriesTable).where(eq(manualCreditEntriesTable.id, id));
+  const pharmacyId = (req.session as { pharmacyId?: number }).pharmacyId;
+  if (!pharmacyId) return res.status(401).json({ error: "Not authenticated" });
+  const [entry] = await db
+    .select()
+    .from(manualCreditEntriesTable)
+    .where(and(eq(manualCreditEntriesTable.id, id), eq(manualCreditEntriesTable.pharmacyId, pharmacyId)));
   if (!entry) {
     res.status(404).json({ error: "Entry not found" });
     return;
@@ -62,6 +79,8 @@ router.get("/manual/:id", async (req, res) => {
 // Create a manual credit entry
 router.post("/manual", async (req, res) => {
   const { customerName, customerId, amount, dueDate, notes, status } = req.body;
+  const pharmacyId = (req.session as { pharmacyId?: number }).pharmacyId;
+  if (!pharmacyId) return res.status(401).json({ error: "Not authenticated" });
 
   if (!customerName || !amount || parseFloat(amount) <= 0) {
     res.status(400).json({ error: "Customer name and amount are required" });
@@ -69,6 +88,7 @@ router.post("/manual", async (req, res) => {
   }
 
   const [entry] = await db.insert(manualCreditEntriesTable).values({
+    pharmacyId,
     customerName,
     customerId: customerId ?? null,
     amount: parseFloat(amount).toFixed(2),
@@ -85,13 +105,18 @@ router.post("/manual", async (req, res) => {
 router.post("/manual/:id/pay", async (req, res) => {
   const id = parseInt(req.params.id);
   const { amountPaid, paymentMethod = "cash", notes } = req.body;
+  const pharmacyId = (req.session as { pharmacyId?: number }).pharmacyId;
+  if (!pharmacyId) return res.status(401).json({ error: "Not authenticated" });
 
   if (!amountPaid || parseFloat(amountPaid) <= 0) {
     res.status(400).json({ error: "Invalid payment amount" });
     return;
   }
 
-  const [entry] = await db.select().from(manualCreditEntriesTable).where(eq(manualCreditEntriesTable.id, id));
+  const [entry] = await db
+    .select()
+    .from(manualCreditEntriesTable)
+    .where(and(eq(manualCreditEntriesTable.id, id), eq(manualCreditEntriesTable.pharmacyId, pharmacyId)));
   if (!entry) {
     res.status(404).json({ error: "Entry not found" });
     return;
@@ -133,7 +158,13 @@ router.patch("/manual/:id", async (req, res) => {
   if (notes !== undefined) updateData.notes = notes;
   if (dueDate !== undefined) updateData.dueDate = dueDate;
 
-  const [entry] = await db.update(manualCreditEntriesTable).set(updateData).where(eq(manualCreditEntriesTable.id, id)).returning();
+  const pharmacyId = (req.session as { pharmacyId?: number }).pharmacyId;
+  if (!pharmacyId) return res.status(401).json({ error: "Not authenticated" });
+  const [entry] = await db
+    .update(manualCreditEntriesTable)
+    .set(updateData)
+    .where(and(eq(manualCreditEntriesTable.id, id), eq(manualCreditEntriesTable.pharmacyId, pharmacyId)))
+    .returning();
 
   if (!entry) {
     res.status(404).json({ error: "Entry not found" });
@@ -146,21 +177,31 @@ router.patch("/manual/:id", async (req, res) => {
 // Delete manual credit entry
 router.delete("/manual/:id", async (req, res) => {
   const id = parseInt(req.params.id);
+  const pharmacyId = (req.session as { pharmacyId?: number }).pharmacyId;
+  if (!pharmacyId) return res.status(401).json({ error: "Not authenticated" });
   // Delete payments first (cascade not guaranteed in all setups)
   await db.delete(manualCreditPaymentsTable).where(eq(manualCreditPaymentsTable.entryId, id));
-  await db.delete(manualCreditEntriesTable).where(eq(manualCreditEntriesTable.id, id));
+  await db
+    .delete(manualCreditEntriesTable)
+    .where(and(eq(manualCreditEntriesTable.id, id), eq(manualCreditEntriesTable.pharmacyId, pharmacyId)));
   res.json({ success: true });
 });
 
 // Get customer credit summary
 router.get("/customer/:customerId", async (req, res) => {
   const customerId = parseInt(req.params.customerId);
-  const [customer] = await db.select().from(customersTable).where(eq(customersTable.id, customerId));
+  const pharmacyId = (req.session as { pharmacyId?: number }).pharmacyId;
+  if (!pharmacyId) return res.status(401).json({ error: "Not authenticated" });
+  const [customer] = await db
+    .select()
+    .from(customersTable)
+    .where(and(eq(customersTable.id, customerId), eq(customersTable.pharmacyId, pharmacyId)));
   if (!customer) { res.status(404).json({ error: "Customer not found" }); return; }
 
   const creditSales = await db.select().from(salesTable).where(
     and(
       eq(salesTable.customerId, customerId),
+      eq(salesTable.pharmacyId, pharmacyId),
       or(eq(salesTable.paymentStatus, "credit"), eq(salesTable.paymentStatus, "partial"))!
     )
   );
@@ -190,13 +231,18 @@ router.get("/customer/:customerId", async (req, res) => {
 router.post("/:saleId/pay", async (req, res) => {
   const saleId = parseInt(req.params.saleId);
   const { amountPaid, paymentMethod = "cash", notes } = req.body;
+  const pharmacyId = (req.session as { pharmacyId?: number }).pharmacyId;
+  if (!pharmacyId) return res.status(401).json({ error: "Not authenticated" });
 
   if (!amountPaid || amountPaid <= 0) {
     res.status(400).json({ error: "Invalid amount" });
     return;
   }
 
-  const [sale] = await db.select().from(salesTable).where(eq(salesTable.id, saleId));
+  const [sale] = await db
+    .select()
+    .from(salesTable)
+    .where(and(eq(salesTable.id, saleId), eq(salesTable.pharmacyId, pharmacyId)));
   if (!sale) { res.status(404).json({ error: "Sale not found" }); return; }
 
   const currentPaid = parseFloat(sale.paidAmount as string);
@@ -227,13 +273,16 @@ router.post("/:saleId/pay", async (req, res) => {
   if (sale.customerId && newStatus === "paid" && sale.paymentStatus !== "paid") {
     await db.update(customersTable).set({
       totalPurchases: sql`${customersTable.totalPurchases} + ${amountPaid}`,
-    }).where(eq(customersTable.id, sale.customerId));
+    }).where(and(eq(customersTable.id, sale.customerId), eq(customersTable.pharmacyId, pharmacyId)));
   }
 
   const items = await db.select().from(saleItemsTable).where(eq(saleItemsTable.saleId, saleId));
   let customerName = null;
   if (updatedSale.customerId) {
-    const [cust] = await db.select().from(customersTable).where(eq(customersTable.id, updatedSale.customerId));
+    const [cust] = await db
+      .select()
+      .from(customersTable)
+      .where(and(eq(customersTable.id, updatedSale.customerId), eq(customersTable.pharmacyId, pharmacyId)));
     customerName = cust?.name ?? null;
   }
 

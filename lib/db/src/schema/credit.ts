@@ -3,6 +3,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { customersTable } from "./customers";
 import { salesTable } from "./sales";
+import { pharmaciesTable } from "./pharmacies";
 
 export const creditPaymentsTable = pgTable("credit_payments", {
   id: serial("id").primaryKey(),
@@ -16,6 +17,7 @@ export const creditPaymentsTable = pgTable("credit_payments", {
 
 export const manualCreditEntriesTable = pgTable("manual_credit_entries", {
   id: serial("id").primaryKey(),
+  pharmacyId: integer("pharmacy_id").references(() => pharmaciesTable.id),
   customerName: text("customer_name").notNull(),
   customerId: integer("customer_id").references(() => customersTable.id),
   amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),

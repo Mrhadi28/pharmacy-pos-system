@@ -1,6 +1,6 @@
 kind = "web"
 previewPath = "/"
-title = "PharmaPOS Pakistan"
+title = "Pharmacy POS System"
 version = "1.0.0"
 id = "artifacts/pharma-pos"
 router = "path"

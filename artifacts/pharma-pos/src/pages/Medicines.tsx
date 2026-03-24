@@ -69,6 +69,7 @@ export default function Medicines() {
   const [filterStatus, setFilterStatus] = useState<"all" | "low" | "expired">("all");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingMedicine, setEditingMedicine] = useState<Medicine | null>(null);
+  const [isSubmittingForm, setIsSubmittingForm] = useState(false);
   
   const queryClient = useQueryClient();
   const { data: medicines = [], isLoading } = useGetMedicines();
@@ -121,7 +122,9 @@ export default function Medicines() {
     setIsDialogOpen(true);
   };
 
-  const onSubmit = (values: z.infer<typeof formSchema>) => {
+  const onSubmit = async (values: z.infer<typeof formSchema>) => {
+    if (isSubmittingForm) return;
+    setIsSubmittingForm(true);
     const payload = {
       ...values,
       categoryId: values.categoryId || undefined,
@@ -132,22 +135,22 @@ export default function Medicines() {
       description: values.description || undefined,
     };
 
-    if (editingMedicine) {
-      updateMut.mutate({ id: editingMedicine.id, data: payload }, {
-        onSuccess: () => {
-          toast({ title: "Medicine updated successfully" });
-          setIsDialogOpen(false);
-          queryClient.invalidateQueries({ queryKey: ["/api/medicines"] });
-        }
-      });
-    } else {
-      createMut.mutate({ data: payload }, {
-        onSuccess: () => {
-          toast({ title: "Medicine added successfully" });
-          setIsDialogOpen(false);
-          queryClient.invalidateQueries({ queryKey: ["/api/medicines"] });
-        }
-      });
+    try {
+      if (editingMedicine) {
+        await updateMut.mutateAsync({ id: editingMedicine.id, data: payload });
+        toast({ title: "Medicine updated successfully" });
+      } else {
+        await createMut.mutateAsync({ data: payload });
+        toast({ title: "Medicine added successfully" });
+      }
+      setIsDialogOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/medicines"] });
+    } catch (e: any) {
+      const details = e?.response?.data?.details;
+      const message = Array.isArray(details) && details.length > 0 ? details.join(", ") : (e?.message ?? "Could not save medicine");
+      toast({ title: "Error", description: message, variant: "destructive" });
+    } finally {
+      setIsSubmittingForm(false);
     }
   };
 
@@ -433,8 +436,8 @@ export default function Medicines() {
               </div>
               <DialogFooter className="pt-4">
                 <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>Cancel</Button>
-                <Button type="submit" disabled={createMut.isPending || updateMut.isPending}>
-                  {createMut.isPending || updateMut.isPending ? "Saving..." : "Save Medicine"}
+                <Button type="submit" disabled={isSubmittingForm || createMut.isPending || updateMut.isPending}>
+                  {isSubmittingForm || createMut.isPending || updateMut.isPending ? "Saving..." : "Save Medicine"}
                 </Button>
               </DialogFooter>
             </form>
