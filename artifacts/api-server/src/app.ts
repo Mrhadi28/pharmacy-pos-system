@@ -26,6 +26,7 @@ function resolveStaticRoot(): string | null {
 
 const staticRoot = resolveStaticRoot();
 const PgStore = connectPgSimple(session);
+const useDbSessionStore = process.env.SESSION_STORE === "db";
 
 function sessionCookieSecure(): boolean {
   const v = process.env.SESSION_COOKIE_SECURE?.toLowerCase();
@@ -62,7 +63,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 const sessionStore =
-  process.env.DATABASE_URL
+  useDbSessionStore && process.env.DATABASE_URL
     ? new PgStore({
         conString: process.env.DATABASE_URL,
         createTableIfMissing: true,
