@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
@@ -24,6 +25,7 @@ function resolveStaticRoot(): string | null {
 }
 
 const staticRoot = resolveStaticRoot();
+const PgStore = connectPgSimple(session);
 
 function sessionCookieSecure(): boolean {
   const v = process.env.SESSION_COOKIE_SECURE?.toLowerCase();
@@ -59,8 +61,17 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+const sessionStore =
+  process.env.DATABASE_URL
+    ? new PgStore({
+        conString: process.env.DATABASE_URL,
+        createTableIfMissing: true,
+      })
+    : undefined;
+
 app.use(session({
   secret: process.env.SESSION_SECRET || "pharma-pos-secret-2024",
+  store: sessionStore,
   resave: false,
   saveUninitialized: false,
   cookie: {
