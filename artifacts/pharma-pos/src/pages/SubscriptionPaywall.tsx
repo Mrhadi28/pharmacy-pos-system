@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { getApiBase } from "@/lib/api-base";
+import { enableLocalTrial } from "@/lib/pharmacy-subscription";
 import { Stethoscope, RefreshCw, LogOut } from "lucide-react";
 
 interface BillingInfo {
@@ -39,6 +40,10 @@ export default function SubscriptionPaywall() {
 
   const amount = info?.amountPkr ?? 12000;
   const wa = info?.whatsapp?.replace(/\D/g, "");
+  const startTrial = (): void => {
+    enableLocalTrial(pharmacy?.id);
+    window.location.reload();
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary/5 via-background to-primary/10 flex items-center justify-center p-4">
@@ -85,6 +90,9 @@ export default function SubscriptionPaywall() {
           <Button className="flex-1" onClick={() => void refresh()} variant="default">
             <RefreshCw className="w-4 h-4 mr-2" />
             Refresh status
+          </Button>
+          <Button className="flex-1" variant="secondary" onClick={startTrial}>
+            Skip for now (14-day trial)
           </Button>
           <Button className="flex-1" variant="outline" onClick={() => void logout()}>
             <LogOut className="w-4 h-4 mr-2" />
